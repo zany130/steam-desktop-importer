@@ -243,13 +243,24 @@ These need a decision. They are **not** resolved unilaterally; current
 behaviour is pinned by `tests/unit/test_open_issues.py` so any change is
 deliberate.
 
+| Issue | Severity | Status |
+| --- | --- | --- |
+| OPEN-1 single quotes | high | **resolved** → DEV-8 |
+| OPEN-2 desktop ID collisions | medium | **decided**, except OPEN-2a |
+| OPEN-2a does a collision block import? | medium | **open** — blocks implementation |
+| OPEN-3 Flatpak file-forwarding markers | medium | **open** — Phase 2 |
+| OPEN-4 invalid booleans | low | default proposed |
+| OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
+| OPEN-6 `LastPlayTime` for new shortcuts | low | default proposed |
+
 ### ~~OPEN-1 — Single quotes~~
 
 **Resolved. See DEV-8.**
 
 ### OPEN-2 — Desktop IDs are not unique
 
-**Severity: medium. Affects §6 persistent state.**
+**Severity: medium. Affects §6 persistent state. Decided 2026-09-09, with one
+point still to confirm — see OPEN-2a.**
 
 The FreeDesktop scheme replaces `/` with `-` and does not escape existing
 dashes, so `vendor/app.desktop` and `vendor-app.desktop` in the same root
@@ -257,13 +268,46 @@ produce the same ID. Observed for real on the capture host
 (`~/.local/share/applications/ons/dev.vencord.Vesktop.desktop` versus
 `~/.local/share/applications/ons-dev.vencord.Vesktop.desktop`).
 
-§7.4 resolves the display side deterministically. The problem is §6, which
-keys persistent Desktop-ID → AppID state on the desktop ID alone: two
-different applications would share one state row, and which one owns it could
-change if a file is added or removed.
+§7.4 resolves the display side deterministically. The risk is narrower than it
+first appears: discovery only ever resolves one file per ID, so at any single
+moment the state row is unambiguous. The danger is **over time** — if the
+winning file is removed, the shadowed file inherits the winner's Steam AppID
+and the user's shortcut silently starts launching a different application.
 
-Needs a decision before Phase 5. Adding the source root to the state key would
-change §6's stated logical identity, so it is not being done unilaterally.
+#### Settled
+
+1. §6's state key is **unchanged**: `(steam_installation_key,
+   steam_account_id32, desktop_id)`. No deviation.
+2. Collisions are resolved **during discovery**, before persistent state is
+   involved.
+3. There is exactly **one effective application per desktop ID**.
+4. Normal XDG precedence applies first. Only files colliding at the **same**
+   precedence level need tie-breaking.
+5. Same-level ties are broken **deterministically**, e.g. stable lexical
+   ordering of the absolute path.
+6. Discovery emits a **`desktop_id_collision` diagnostic** and **retains every
+   colliding source path** for debugging.
+7. Colliding physical files never get **separate Steam-AppID state rows**.
+
+#### OPEN-2a — Does a collision block import?
+
+The two halves of the decision disagree here and this is **not** being
+resolved unilaterally:
+
+- "Detect collisions at discovery time and refuse to import either colliding
+  entry until the user resolves it" implies the colliding entries are
+  **unsupported** until acknowledged.
+- "Choose one deterministically ... emit a `desktop_id_collision` diagnostic"
+  implies discovery **picks a winner and proceeds**.
+
+They reconcile if the deterministic winner establishes *identity* while a
+separate policy governs *importability*: pick the winner, emit the diagnostic,
+and mark that one entry unsupported until acknowledged. That reading has not
+been confirmed, so no collision handling has been implemented yet.
+
+Current behaviour is unchanged: §7.4 first-match-wins, loser recorded in
+`DiscoveryResult.shadowed`, no diagnostic, no import block. Pinned by
+`test_open_2_desktop_ids_can_collide_between_nested_and_dashed_paths`.
 
 ### OPEN-3 — Flatpak `--file-forwarding` markers survive `%U` removal
 
@@ -282,7 +326,8 @@ Confirmed against a real export (`us.zoom.Zoom`).
 
 ### OPEN-4 — Invalid booleans fall back in an unsafe direction
 
-**Severity: low.**
+**Severity: low. Proposed default accepted unless objected to: keep current
+behaviour, which matches GLib exactly.**
 
 `Terminal='False'` appears on the capture host (7 entries). Quoted values are
 invalid, so they fall back to the default. Here that happens to be correct,
@@ -301,7 +346,8 @@ importable; unresolvable marks it unavailable per §8.
 
 ### OPEN-6 — `LastPlayTime` for new shortcuts is unspecified
 
-**Severity: low. Phase 6.**
+**Severity: low. Phase 6. Proposed default accepted unless objected to:
+`LastPlayTime = 0` for newly created shortcuts, meaning never played.**
 
 §15 lists the field but gives no value for newly created entries. Real entries
 carry both `0` and real timestamps.
