@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DBus Activatable With Exec Fallback
+Comment=DBusActivatable=true but a usable Exec fallback exists, so it is importable.
+Exec=/usr/bin/dbus-app --gapplication-service
+Icon=dbus-with-exec
+DBusActivatable=true
+Terminal=false

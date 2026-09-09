@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Overridden (data_dir_system)
+Comment=Lowest-precedence copy. Must lose to both higher roots.
+Exec=/usr/bin/overridden --from data_dir_system
+Icon=overridden
+Terminal=false

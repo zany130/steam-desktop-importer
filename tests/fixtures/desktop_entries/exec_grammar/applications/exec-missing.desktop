@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=No Exec At All
+Comment=Type=Application with no Exec and no DBusActivatable. Not importable.
+Icon=exec-missing
+Terminal=false

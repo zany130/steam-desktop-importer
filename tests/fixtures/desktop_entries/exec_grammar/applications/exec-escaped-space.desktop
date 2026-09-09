@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Escaped Space
+Comment=Backslash-s is a string-value escape for a space, and the specification
+Comment[x-note]=says that escape runs BEFORE the Exec quoting rule. So an unquoted
+Comment[x-note2]=backslash-s really does split the argument in two. This fixture pins
+Comment[x-note3]=that ordering; it is deliberately counter-intuitive.
+Exec=/usr/bin/spacer one\stwo "three\sfour"
+Icon=escaped-space
+Terminal=false

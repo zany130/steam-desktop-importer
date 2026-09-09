@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Local Only
+Comment=Exists only in data_dir_local.
+Exec=/usr/bin/local-only
+Icon=local-only
+Terminal=false

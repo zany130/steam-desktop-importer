@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=With Working Directory
+Comment=Path= maps to Steam StartDir. IMPLEMENTATION.md rule 6 forbids inferring
+Comment[x-note]=StartDir from the executable's parent directory, so /opt/example/bin
+Comment[x-note2]=must NOT leak into StartDir here.
+Exec=/opt/example/bin/worker --serve
+Path=/opt/example/workdir
+Icon=with-path
+Terminal=false

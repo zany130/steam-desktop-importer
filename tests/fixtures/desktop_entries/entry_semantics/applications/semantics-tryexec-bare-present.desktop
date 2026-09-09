@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TryExec Bare Present
+Comment=TryExec is a bare name and must be resolved against PATH.
+Exec=sh -c true
+TryExec=sh
+Icon=tryexec-bare
+Terminal=false

@@ -1,0 +1,21 @@
+# A comment before the group header is legal.
+
+# Blank lines are legal too.
+[Desktop Entry]
+Type = Application
+Name   =   Whitespace And Actions
+Exec	=	/usr/bin/whitespace --main
+Icon=whitespace-actions
+Terminal=false
+Actions=NewWindow;Private;
+
+# Keys in action groups must NOT leak into the main Desktop Entry group.
+[Desktop Action NewWindow]
+Name=New Window
+Exec=/usr/bin/whitespace --new-window
+Terminal=true
+
+[Desktop Action Private]
+Name=Private Window
+Exec=/usr/bin/whitespace --private
+Icon=should-not-be-used

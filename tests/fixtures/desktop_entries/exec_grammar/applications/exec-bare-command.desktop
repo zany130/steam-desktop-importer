@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Bare Command
+Comment=Exec names a bare command, not an absolute path. Steam needs an absolute
+Comment[x-note]=exe, so this must be resolved against PATH at adapter time (Phase 2).
+Exec=sh -c true
+Icon=bare-command
+Terminal=false

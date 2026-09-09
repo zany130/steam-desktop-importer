@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Native App
+Comment=An ordinary distribution-packaged application.
+Exec=/usr/bin/native-app --start %U
+Icon=native-app
+Terminal=false
+Categories=Utility;

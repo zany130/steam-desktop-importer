@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Without Working Directory
+Comment=No Path= key. StartDir must end up empty, NOT /opt/example/bin.
+Exec=/opt/example/bin/worker --serve
+Icon=no-path
+Terminal=false

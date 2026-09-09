@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Percent u
+Comment=%u is a single URL.
+Exec=/usr/bin/single-url %u
+Icon=percent-u
+Terminal=false

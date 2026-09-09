@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Deep Nested (data_dir_system)
+Comment=Same nested-vendor-Deep.desktop ID as the data_home copy. Must lose.
+Exec=/usr/bin/deep-nested --from data_dir_system
+Icon=deep-nested
+Terminal=false

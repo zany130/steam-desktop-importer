@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Flatpak Full Ref
+Comment=The positional argument is a full ref (app/ID/arch/branch), not a bare ID.
+Exec=/usr/bin/flatpak run app/org.example.FlatpakRef/x86_64/stable
+Icon=org.example.FlatpakRef
+Terminal=false

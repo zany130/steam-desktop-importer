@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Link
+Name=Shadowing Link
+Comment=A non-Application entry still claims the desktop ID. The lower-precedence
+Comment[x-test]=Type=Application copy of this ID must NOT be resurrected.
+URL=https://example.invalid/

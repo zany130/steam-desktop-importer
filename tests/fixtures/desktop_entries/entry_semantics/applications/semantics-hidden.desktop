@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Hidden
+Comment=Hidden has deletion/masking semantics. Must never be offered for import.
+Exec=/usr/bin/hidden
+Icon=hidden
+Hidden=true
+Terminal=false

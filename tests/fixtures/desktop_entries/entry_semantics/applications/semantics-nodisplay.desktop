@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=No Display
+Comment=NoDisplay is a visibility flag, NOT a deletion mask. The entry must still
+Comment[x-note]=resolve and stay importable behind the "show menu-hidden" toggle.
+Exec=/usr/bin/no-display
+Icon=no-display
+NoDisplay=true
+Terminal=false

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Escaped Quote
+Comment=A literal double quote inside a quoted argument. The string-value escape
+Comment[x-note]=rule runs first, so the file needs a doubled backslash to survive
+Comment[x-note2]=into the quoting stage as a single escaping backslash.
+Exec=/usr/bin/quoter --msg "say \\"hi\\"" --end
+Icon=escaped-quote
+Terminal=false

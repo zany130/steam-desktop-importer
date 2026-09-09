@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "steam-desktop-importer"
+version = "0.0.1"
+description = "Import FreeDesktop .desktop applications into Steam as non-Steam shortcuts"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# Runtime dependencies per IMPLEMENTATION.md section 4.
+# Phases 0-1 only need pyxdg; the rest are declared up front so the tested
+# dependency range and lock file cover the whole MVP.
+dependencies = [
+    "PySide6>=6.6",
+    "vdf>=3.4",
+    "requests>=2.31",
+    "psutil>=5.9",
+    "pyxdg>=0.28",
+]
+
+[project.scripts]
+steam-desktop-importer = "steam_desktop_importer.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/steam_desktop_importer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+markers = [
+    "live_steam: touches a real Steam installation; read-only unless explicitly stated",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

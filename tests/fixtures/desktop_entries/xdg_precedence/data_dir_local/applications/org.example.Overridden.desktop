@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Overridden (data_dir_local)
+Comment=Middle-precedence copy. Must lose to data_home.
+Exec=/usr/bin/overridden --from data_dir_local
+Icon=overridden
+Terminal=false

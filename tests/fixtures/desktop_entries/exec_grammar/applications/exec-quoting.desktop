@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Quoting
+Comment=Double-quoted arguments containing spaces and reserved characters.
+Exec="/opt/My Apps/bin/launcher" --title "Hello World" --sep ";" plain
+Icon=quoting
+Terminal=false

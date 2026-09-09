@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=User Only
+Comment=Exists only in data_home.
+Exec=/usr/bin/user-only
+Icon=user-only
+Terminal=false

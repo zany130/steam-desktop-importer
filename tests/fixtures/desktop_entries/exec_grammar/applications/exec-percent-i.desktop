@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Percent i
+Comment=%i expands to TWO arguments: --icon followed by the Icon key value.
+Comment[x-note]=This is why field-code expansion cannot be a string-level regex.
+Exec=/usr/bin/iconic %i --flag
+Icon=percent-i-icon-name
+Terminal=false

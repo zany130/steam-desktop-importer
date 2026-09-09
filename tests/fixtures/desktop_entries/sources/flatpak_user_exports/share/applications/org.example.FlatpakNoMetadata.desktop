@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Flatpak Without X-Flatpak
+Comment=No X-Flatpak key, so the app ID must be recovered from the argv by
+Comment[x-note]=skipping "run" and its option flags rather than by taking a fixed index.
+Exec=flatpak run --nosocket=wayland --env=FOO=bar org.example.FlatpakNoMetadata --app-flag %U
+Icon=org.example.FlatpakNoMetadata
+Terminal=false

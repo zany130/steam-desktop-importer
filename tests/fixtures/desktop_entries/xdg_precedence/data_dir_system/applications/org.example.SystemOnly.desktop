@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=System Only
+Comment=Exists only in data_dir_system.
+Exec=/usr/bin/system-only
+Icon=system-only
+Terminal=false

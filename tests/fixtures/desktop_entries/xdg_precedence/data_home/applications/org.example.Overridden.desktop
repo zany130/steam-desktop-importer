@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Overridden (data_home)
+Comment=Highest-precedence copy. This one must win.
+Exec=/usr/bin/overridden --from data_home
+Icon=overridden
+Terminal=false
+Categories=Utility;

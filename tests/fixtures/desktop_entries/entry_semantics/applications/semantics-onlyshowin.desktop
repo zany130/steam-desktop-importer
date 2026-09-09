@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Only Show In GNOME
+Comment=Metadata must be preserved. Visibility filtering is a UI concern; the entry
+Comment[x-note]=stays available behind an advanced filter on other desktops.
+Exec=/usr/bin/gnome-only
+Icon=onlyshowin
+OnlyShowIn=GNOME;Unity;
+Terminal=false

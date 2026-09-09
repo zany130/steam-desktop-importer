@@ -1,0 +1,91 @@
+# Steam Desktop Importer
+
+A native Linux desktop application that discovers installed applications from
+FreeDesktop `.desktop` entries and imports selected ones into Steam as
+non-Steam shortcuts, with optional SteamGridDB artwork.
+
+Built to the specification in `IMPLEMENTATION.md`.
+
+## Status
+
+**Phases 0 and 1 are implemented. Nothing else is.**
+
+There is no GUI yet, and no code path writes to a Steam directory. A test
+(`test_package_performs_no_filesystem_writes`) enforces that, in line with the
+Phase 7 rule "do not enable live writes until this phase passes".
+
+| Phase | Scope | Status |
+| --- | --- | --- |
+| 0 | Fixtures and format characterization | done |
+| 1 | XDG discovery and Desktop Entry parsing | done |
+| 2 | Launch adapters | not started |
+| 3 | GUI | not started |
+| 4 | Steam install/account discovery | fixtures only |
+| 5 | Persistent state and AppID allocation | not started |
+| 6 | VDF read/update | fixtures only |
+| 7 | Safe VDF commit | not started |
+| 8–11 | SteamGridDB, artwork UI, release gates | not started |
+
+See `CHECKLIST.md` for per-requirement status, deviations, and six open issues
+that need decisions.
+
+## What works today
+
+```bash
+# Show the ordered applications/ roots that will be scanned.
+steam-desktop-importer debug roots
+
+# Discover and resolve every desktop entry.
+steam-desktop-importer debug scan --importable-only
+
+# Explain one desktop file in full.
+steam-desktop-importer debug desktop-entry /usr/share/applications/org.kde.kate.desktop
+```
+
+On the development host `debug scan` resolves 804 entries with 0 parse errors,
+4 masked by `Hidden=true`, and 9 shadowed lower-priority copies.
+
+## Development
+
+```bash
+uv venv --python 3.12
+uv pip install -e '.[dev]'
+.venv/bin/python -m pytest
+```
+
+Phases 0–1 only need `vdf`, `pyxdg` and `pytest`. `PySide6` is declared for
+later phases but is not imported by anything yet.
+
+Regenerate the binary VDF fixtures (they are committed, so this is only needed
+if the generator changes):
+
+```bash
+python scripts/build_vdf_fixtures.py
+```
+
+## Documentation
+
+| File | Contents |
+| --- | --- |
+| `IMPLEMENTATION.md` | The authoritative specification |
+| `CHECKLIST.md` | Requirement-by-requirement status, deviations, open issues |
+| `docs/PHASE0_FORMAT_CHARACTERIZATION.md` | What was actually observed on a real Steam install |
+| `docs/TEST_ENVIRONMENT.md` | The documented native Steam test environment |
+| `tests/fixtures/desktop_entries/README.md` | Fixture index and Phase 1 coverage mapping |
+| `tests/fixtures/steam_config/README.md` | Steam account fixture index |
+
+## Safety rules in force
+
+These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
+
+- `.desktop` files are not treated as INI plus shell commands; `configparser`
+  and `shlex` are not used.
+- Applications are keyed by FreeDesktop desktop ID, never by basename.
+- `Hidden=true` masks lower-priority copies; `NoDisplay=true` does not.
+- `env VAR=value` wrappers are preserved verbatim in argv.
+- `StartDir` comes from `Path=` or stays empty; it is never inferred from the
+  executable's parent directory.
+- CRC32 is not claimed to be Steam's AppID algorithm.
+- No Steam installation or account is chosen silently.
+- Steam collections are not implemented.
+- Flatpak Steam sandbox permissions are never modified.

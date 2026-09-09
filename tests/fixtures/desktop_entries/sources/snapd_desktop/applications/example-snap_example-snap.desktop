@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Example Snap
+Comment=A realistic snapd export. It already carries a usable launch command, so
+Comment[x-note]=IMPLEMENTATION.md section 10 says not to invent a universal snap path.
+Comment[x-note2]=Note this one is also an env wrapper and must be preserved as such.
+Exec=env BAMF_DESKTOP_FILE_HINT=/var/lib/snapd/desktop/applications/example-snap_example-snap.desktop /snap/bin/example-snap %U
+Icon=/snap/example-snap/current/meta/gui/icon.png
+Terminal=false
+X-SnapInstanceName=example-snap

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Localized Application
+Name[de]=Lokalisierte Anwendung
+Name[de_DE]=Lokalisierte Anwendung (DE)
+Name[sr]=Lokalizovana Aplikacija
+Name[sr@latin]=Lokalizovana Aplikacija (latin)
+Name[fr_CA]=Application Localisee (CA)
+GenericName=Example
+GenericName[de]=Beispiel
+Comment=Locale lookup must follow lang_COUNTRY@MODIFIER, lang_COUNTRY, lang@MODIFIER,
+Comment[x-note]=lang, then the unlocalized key. Encoding is stripped and never matched.
+Exec=/usr/bin/localized
+Icon=localized
+Terminal=false

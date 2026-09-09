@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal Application
+Comment=Terminal=true. Unsupported for direct import until a tested terminal
+Comment[x-note]=adapter exists. The MVP targets graphical applications.
+Exec=/usr/bin/htop
+Icon=terminal-app
+Terminal=true

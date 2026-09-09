@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Other Snap
+Comment=No X-SnapInstanceName key. Detection must fall back to the /snap/bin path
+Comment[x-note]=and to the snapd export root.
+Exec=/snap/bin/other-snap --flag
+Icon=other-snap
+Terminal=false

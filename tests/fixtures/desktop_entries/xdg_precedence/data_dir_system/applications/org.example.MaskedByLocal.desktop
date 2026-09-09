@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Masked By Local (data_dir_system copy)
+Comment=Behind the data_dir_local Hidden=true mask.
+Exec=/usr/bin/masked-by-local
+Icon=masked-by-local
+Terminal=false

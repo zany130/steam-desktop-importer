@@ -1,0 +1,4 @@
+# Malformed: no [Desktop Entry] group at all.
+Type=Application
+Name=Should Not Parse
+Exec=/usr/bin/nope

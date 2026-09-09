@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Embedded Field Code
+Comment=A file field code glued to other text. Deleting just the code would leave
+Comment[x-note]=a dangling --file= argument, so the whole token is dropped instead and
+Comment[x-note2]=a warning is recorded.
+Exec=/usr/bin/embedded --file=%f --keep-me
+Icon=embedded-fieldcode
+Terminal=false

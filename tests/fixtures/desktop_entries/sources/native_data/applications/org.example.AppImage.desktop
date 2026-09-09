@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Integrated AppImage
+Comment=An integrated AppImage exported to ~/.local/share/applications by an
+Comment[x-note]=integration tool. It points at a persistent path, so it is treated as
+Comment[x-note2]=an ordinary executable.
+Exec="/home/example/Applications/Example_Tool-1.2.3-x86_64.AppImage" %U
+Icon=example-tool
+Terminal=false
+X-AppImage-Version=1.2.3
+X-AppImage-Integrate=true

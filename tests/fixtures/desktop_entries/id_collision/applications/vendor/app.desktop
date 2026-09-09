@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Nested File
+Comment=A DIFFERENT application that derives to the SAME desktop ID,
+Comment[x-note]=vendor-app.desktop, because the FreeDesktop scheme replaces the
+Comment[x-note2]=directory separator with a dash and dashes are not escaped.
+Comment[x-note3]=Observed for real on the capture host. See CHECKLIST.md OPEN-2.
+Exec=/usr/bin/nested-file
+Icon=nested-file
+Terminal=false

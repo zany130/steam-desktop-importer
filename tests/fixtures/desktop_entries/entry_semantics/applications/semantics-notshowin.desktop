@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Not Show In KDE
+Comment=Suppressed under KDE, visible elsewhere. Trailing semicolon must not
+Comment[x-note]=produce an empty list element.
+Exec=/usr/bin/not-kde
+Icon=notshowin
+NotShowIn=KDE;
+Terminal=false

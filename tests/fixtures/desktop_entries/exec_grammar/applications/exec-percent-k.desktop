@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Percent k
+Comment=%k is the location of this desktop file itself.
+Exec=/usr/bin/locate-me --from %k
+Icon=percent-k
+Terminal=false

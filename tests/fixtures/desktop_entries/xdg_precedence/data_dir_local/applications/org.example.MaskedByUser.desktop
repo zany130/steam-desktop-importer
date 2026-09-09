@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Masked By User (data_dir_local copy)
+Comment=Perfectly valid and visible on its own, but the data_home copy sets
+Comment[x-test]=Hidden=true, so this must never surface. Regression guard for
+Comment[x-test2]=IMPLEMENTATION.md rule 3.
+Exec=/usr/bin/masked-by-user
+Icon=masked-by-user
+Terminal=false

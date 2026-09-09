@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TryExec Absent
+Comment=No TryExec key at all. Absence is not failure: availability is unknown and
+Comment[x-note]=must not be treated as unavailable.
+Exec=/bin/sh -c true
+Icon=tryexec-absent
+Terminal=false

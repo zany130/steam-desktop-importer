@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Flat File With A Dash
+Comment=Derives to desktop ID vendor-app.desktop.
+Exec=/usr/bin/flat-file
+Icon=flat-file
+Terminal=false

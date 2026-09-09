@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Boolean Variants
+Comment=Only the exact strings "true" and "false" are valid booleans in the current
+Comment[x-note]=specification. Legacy 0/1 values appear in the wild and are accepted
+Comment[x-note2]=leniently, but anything else must fall back to the default, not crash.
+Exec=/usr/bin/booleans
+Icon=booleans
+Terminal=1
+NoDisplay=TRUE
+DBusActivatable=yes
+Hidden=0

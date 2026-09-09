@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Shadowed Application
+Comment=A perfectly good Type=Application entry that must stay shadowed because
+Comment[x-test]=a higher-precedence Type=Link entry already claimed this desktop ID.
+Exec=/usr/bin/shadowed-application
+Icon=shadowed-application
+Terminal=false

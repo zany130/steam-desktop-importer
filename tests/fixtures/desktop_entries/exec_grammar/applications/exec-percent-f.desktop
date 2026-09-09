@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Percent f
+Comment=%f is a single local file. With no file supplied the token is dropped.
+Exec=/usr/bin/single-file %f
+Icon=percent-f
+Terminal=false

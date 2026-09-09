@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Percent U
+Comment=The single most common real-world case: a trailing %U to be dropped.
+Exec=/usr/bin/multi-url --new-window %U
+Icon=percent-uu
+Terminal=false

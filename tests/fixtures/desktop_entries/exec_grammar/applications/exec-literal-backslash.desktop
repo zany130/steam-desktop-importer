@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Literal Backslash
+Comment=The Desktop Entry specification states that unambiguously representing a
+Comment[x-note]=literal backslash inside a quoted argument requires FOUR successive
+Comment[x-note2]=backslashes in the file. It also gives a doubled-backslash dollar
+Comment[x-note3]=sign as the way to write a literal dollar sign in a quoted argument.
+Exec=/usr/bin/backslash "C:\\\\Program Files\\\\App" --var "\\$HOME"
+Icon=literal-backslash
+Terminal=false

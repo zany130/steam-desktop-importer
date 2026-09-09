@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Titled Application
+Name[de]=Betitelte Anwendung
+Name[de_DE]=Betitelte Anwendung (Deutschland)
+Name[fr]=Application Intitulee
+Comment=%c is the translated Name. It contains spaces and must stay ONE argument.
+Exec=/usr/bin/titled --title %c
+Icon=percent-c
+Terminal=false

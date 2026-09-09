@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Deprecated Codes
+Comment=%d %D %n %N %v %m are deprecated. They expand to nothing but must be
+Comment[x-note]=reported so the UI can warn instead of silently changing the command.
+Exec=/usr/bin/legacy %d %n --keep %v
+Icon=deprecated-codes
+Terminal=false

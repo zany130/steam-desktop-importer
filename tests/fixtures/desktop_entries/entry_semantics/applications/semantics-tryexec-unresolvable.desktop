@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=TryExec Unresolvable
+Comment=TryExec points at a binary that does not exist. The entry must be marked
+Comment[x-note]=unavailable rather than silently imported as a broken shortcut.
+Exec=/opt/steam-desktop-importer-test/definitely-not-installed --run
+TryExec=/opt/steam-desktop-importer-test/definitely-not-installed
+Icon=tryexec-missing
+Terminal=false

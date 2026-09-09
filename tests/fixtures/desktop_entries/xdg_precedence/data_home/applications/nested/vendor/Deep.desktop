@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Deep Nested (data_home)
+Comment=Desktop ID must be nested-vendor-Deep.desktop, not Deep.desktop.
+Exec=/usr/bin/deep-nested --from data_home
+Icon=deep-nested
+Terminal=false

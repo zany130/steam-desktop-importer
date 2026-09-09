@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Percent F
+Comment=%F is a file list. With no files supplied it expands to zero arguments.
+Exec=/usr/bin/multi-file --batch %F
+Icon=percent-ff
+Terminal=false

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Masked By User (data_dir_system copy)
+Comment=Second lower-precedence copy behind the data_home Hidden=true mask.
+Exec=/usr/bin/masked-by-user
+Icon=masked-by-user
+Terminal=false

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=DBus Activatable Without Exec
+Comment=DBusActivatable=true with no Exec fallback. The importer does not implement
+Comment[x-note]=D-Bus activation, so this is unsupported for the MVP.
+Icon=dbus-no-exec
+DBusActivatable=true
+Terminal=false

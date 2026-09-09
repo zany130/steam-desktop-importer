@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TryExec Absolute Present
+Comment=TryExec is an absolute path that exists and is executable everywhere.
+Exec=/bin/sh -c true
+TryExec=/bin/sh
+Icon=tryexec-ok
+Terminal=false

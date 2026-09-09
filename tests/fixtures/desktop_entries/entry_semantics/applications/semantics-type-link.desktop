@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Link
+Name=A Link Entry
+Comment=Not an import candidate, but it still occupies its desktop ID.
+URL=https://example.invalid/
+Icon=link-entry

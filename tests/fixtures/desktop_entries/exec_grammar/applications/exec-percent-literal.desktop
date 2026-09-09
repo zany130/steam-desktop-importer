@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Percent Literal
+Comment=Two percent signs mean one literal percent sign. The --pattern value is
+Comment[x-note]=adversarial: a naive right-to-left or non-anchored scan would find a
+Comment[x-note2]=file field code inside it that is not really there.
+Exec=/usr/bin/progress --label 100%% --pattern %%%%f
+Icon=percent-literal
+Terminal=false

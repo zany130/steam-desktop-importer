@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Masked By Local
+Comment=Masking also works from a middle-precedence root, not just data_home.
+Exec=/usr/bin/masked-by-local
+Icon=masked-by-local
+Terminal=false
+Hidden=true

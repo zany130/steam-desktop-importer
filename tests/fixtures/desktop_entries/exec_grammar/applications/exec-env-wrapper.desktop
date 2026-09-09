@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Env Wrapper
+Comment=IMPLEMENTATION.md rule 5: the env wrapper must be preserved verbatim in
+Comment[x-note]=argv. It must NOT be rewritten into exe=/usr/bin/real-app plus
+Comment[x-note2]=LaunchOptions="LANG=C ...", which would change semantics.
+Exec=env LANG=C GDK_BACKEND=x11 /usr/bin/real-app --flag %U
+Icon=env-wrapper
+Terminal=false

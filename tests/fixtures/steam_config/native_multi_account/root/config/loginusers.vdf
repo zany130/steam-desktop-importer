@@ -1,0 +1,23 @@
+"users"
+{
+	"76561197971376839"
+	{
+		"AccountName"		"alpha_user"
+		"PersonaName"		"Alpha"
+		"RememberPassword"		"1"
+		"WantsOfflineMode"		"0"
+		"SkipOfflineModeWarning"		"0"
+		"AutoLogin"		"0"
+		"Timestamp"		"1757000000"
+	}
+	"76561197982487950"
+	{
+		"AccountName"		"beta_user"
+		"PersonaName"		"Beta"
+		"RememberPassword"		"1"
+		"WantsOfflineMode"		"0"
+		"SkipOfflineModeWarning"		"0"
+		"AutoLogin"		"1"
+		"Timestamp"		"1757900000"
+	}
+}

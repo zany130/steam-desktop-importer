@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Comment=Required Name key is missing. Must be reported, not silently defaulted.
+Exec=/usr/bin/nameless
+Icon=nameless
+Terminal=false

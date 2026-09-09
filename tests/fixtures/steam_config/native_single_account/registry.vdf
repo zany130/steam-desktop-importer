@@ -1,0 +1,19 @@
+"Registry"
+{
+	"HKCU"
+	{
+		"Software"
+		{
+			"Valve"
+			{
+				"Steam"
+				{
+					"AutoLoginUser"		"single_user"
+					"language"		"english"
+					"Rate"		"5000"
+					"AlreadyRetriedOfflineMode"		"0"
+				}
+			}
+		}
+	}
+}

@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Empty Exec
+Comment=Exec key present but empty. Must behave like a missing Exec, not crash.
+Exec=
+Icon=exec-empty
+Terminal=false

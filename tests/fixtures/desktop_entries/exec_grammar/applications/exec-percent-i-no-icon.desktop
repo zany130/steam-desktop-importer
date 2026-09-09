@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Percent i Without Icon
+Comment=No Icon key, so %i must expand to ZERO arguments, not to a bare --icon.
+Exec=/usr/bin/iconic %i --flag
+Terminal=false

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Flatpak App
+Comment=A realistic Flatpak export. Note the trailing "@@u %U @@" file-forwarding
+Comment[x-note]=block: the LAST token is not the app ID. IMPLEMENTATION.md section 10
+Comment[x-note2]=explicitly forbids assuming it is. X-Flatpak is the reliable source.
+Exec=/usr/bin/flatpak run --branch=stable --arch=x86_64 --command=example-app --file-forwarding org.example.FlatpakApp @@u %U @@
+Icon=org.example.FlatpakApp
+Terminal=false
+X-Flatpak=org.example.FlatpakApp
+X-Flatpak-Tags=proprietary;

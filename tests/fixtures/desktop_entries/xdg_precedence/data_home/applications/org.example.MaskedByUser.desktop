@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Masked By User
+Comment=Hidden=true here must mask ALL lower-precedence copies of this desktop ID.
+Exec=/usr/bin/masked-by-user
+Icon=masked-by-user
+Terminal=false
+Hidden=true
