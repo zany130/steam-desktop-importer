@@ -246,9 +246,9 @@ deliberate.
 | Issue | Severity | Status |
 | --- | --- | --- |
 | OPEN-1 single quotes | high | **resolved** → DEV-8 |
-| OPEN-2 desktop ID collisions | medium | **decided**, except OPEN-2a |
-| OPEN-2a does a collision block import? | medium | **open** — blocks implementation |
-| OPEN-3 Flatpak file-forwarding markers | medium | **open** — Phase 2 |
+| OPEN-2 desktop ID collisions | medium | **decided** — not yet implemented |
+| OPEN-2a does a collision block import? | medium | **decided** — not yet implemented |
+| OPEN-3 Flatpak file-forwarding markers | medium | **decided** — Phase 2 |
 | OPEN-4 invalid booleans | low | default proposed |
 | OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
 | OPEN-6 `LastPlayTime` for new shortcuts | low | default proposed |
@@ -289,29 +289,33 @@ and the user's shortcut silently starts launching a different application.
    colliding source path** for debugging.
 7. Colliding physical files never get **separate Steam-AppID state rows**.
 
-#### OPEN-2a — Does a collision block import?
+#### OPEN-2a — Does a collision block import? (decided 2026-09-09)
 
-The two halves of the decision disagree here and this is **not** being
-resolved unilaterally:
+Identity and importability are **separate concerns**:
 
-- "Detect collisions at discovery time and refuse to import either colliding
-  entry until the user resolves it" implies the colliding entries are
-  **unsupported** until acknowledged.
-- "Choose one deterministically ... emit a `desktop_id_collision` diagnostic"
-  implies discovery **picks a winner and proceeds**.
+8. The deterministic winner from point 5 establishes **identity**. Discovery
+   always produces exactly one entry for the ID.
+9. That entry is marked **unsupported / not importable** until the user
+   acknowledges the collision. Importability, not identity, is what the
+   collision blocks.
 
-They reconcile if the deterministic winner establishes *identity* while a
-separate policy governs *importability*: pick the winner, emit the diagnostic,
-and mark that one entry unsupported until acknowledged. That reading has not
-been confirmed, so no collision handling has been implemented yet.
+So discovery never refuses to *resolve* a colliding ID, and never emits two
+entries for it; it resolves one and withholds import consent.
 
-Current behaviour is unchanged: §7.4 first-match-wins, loser recorded in
-`DiscoveryResult.shadowed`, no diagnostic, no import block. Pinned by
-`test_open_2_desktop_ids_can_collide_between_nested_and_dashed_paths`.
+**Not yet implemented.** Current behaviour is §7.4 first-match-wins, loser
+recorded in `DiscoveryResult.shadowed`, no diagnostic, no import block, pinned
+by `test_open_2_desktop_ids_can_collide_between_nested_and_dashed_paths`.
+Implementing points 5–9 requires:
+
+- a deterministic same-level tie-break in `discover_applications`,
+- a `desktop_id_collision` diagnostic carrying every colliding source path,
+- an unsupported-reason on the winning `DesktopApplication`,
+- an acknowledgement path so the user can lift the block,
+- updating the pinning test to assert the new behaviour.
 
 ### OPEN-3 — Flatpak `--file-forwarding` markers survive `%U` removal
 
-**Severity: medium. Phase 2 work, flagged now.**
+**Severity: medium. Phase 2 work. Decided 2026-09-09.**
 
 `--file-forwarding` wraps document arguments in `@@u` and `@@`. Dropping `%U`
 correctly leaves those markers behind:
@@ -320,9 +324,18 @@ correctly leaves those markers behind:
 flatpak run ... --file-forwarding org.example.App @@u @@
 ```
 
-The Phase 1 parser is right not to touch non-field-code tokens. The Phase 2
-Flatpak adapter has to strip the marker pair when no document is passed.
-Confirmed against a real export (`us.zoom.Zoom`).
+The Phase 1 parser is right not to touch non-field-code tokens. **Decision:**
+the Phase 2 Flatpak adapter strips the marker block *and* the
+`--file-forwarding` flag itself whenever no document is passed, which is
+always the case for Steam shortcuts. Confirmed against a real export
+(`us.zoom.Zoom`).
+
+Note this was decided without empirically confirming whether `flatpak` would
+have consumed the stray markers harmlessly on its own. Stripping is the safe
+direction either way — it cannot leave literal `@@u` in argv — but the
+adapter should still get a test proving the stripped command launches.
+
+**Not yet implemented.** Phase 2 has not started.
 
 ### OPEN-4 — Invalid booleans fall back in an unsafe direction
 
