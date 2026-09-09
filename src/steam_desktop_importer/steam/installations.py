@@ -11,8 +11,8 @@ IMPLEMENTATION.md §12. Three rules drive the whole module:
 3. **Never silently use the first path that exists** (rule 7). Discovery
    returns every candidate; choosing is a separate, explicit step.
 
-Nothing here writes. Selection is *computed*, and persisting the user's
-choice is Phase 5 work.
+Nothing here writes. Selection is *computed*; the Phase 5 store persists
+the user's confirmed choice.
 """
 
 from __future__ import annotations
@@ -181,7 +181,7 @@ def select_installation(
         installations: Candidates from :func:`discover_installations`.
         remembered_key: A previously confirmed
             :attr:`~steam_desktop_importer.models.SteamInstallation.key`.
-            Persisting it is Phase 5; this only honours it.
+            The Phase 5 store persists it; this only honours it.
     """
     if not installations:
         return InstallationSelection((), None, False, "no Steam installation found")

@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from steam_desktop_importer.desktop.discovery import ApplicationRoot, discover_applications
+from steam_desktop_importer.desktop.discovery import (
+    ApplicationRoot,
+    CollisionAcknowledgement,
+    collision_fingerprint,
+    discover_applications,
+)
 from steam_desktop_importer.desktop.parser import build_application, parse_desktop_entry
 
 from ..conftest import DESKTOP_ENTRIES
@@ -82,9 +87,13 @@ def test_resolved_open_2_collisions_resolve_to_one_entry_but_block_import():
 def test_resolved_open_2_acknowledging_a_collision_lifts_the_import_block():
     """The block is consent, not a permanent verdict; the diagnostic remains."""
     root = DESKTOP_ENTRIES / "id_collision" / "applications"
+    flat = root / "vendor-app.desktop"
+    nested = root / "vendor" / "app.desktop"
     result = discover_applications(
         roots=[ApplicationRoot(root, "test")],
-        acknowledged_collisions={"vendor-app.desktop"},
+        acknowledged_collisions=[
+            CollisionAcknowledgement("vendor-app.desktop", flat, (flat, nested))
+        ],
     )
 
     app = result.applications["vendor-app.desktop"]
@@ -164,6 +173,113 @@ def test_resolved_open_2_an_already_unsupported_winner_keeps_its_own_reason(tmp_
     assert app.supported_for_import is False
     assert app.unsupported_code == "no_exec"
     assert app.has_collision is True
+
+
+def _write_app(path: Path, name: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"[Desktop Entry]\nType=Application\nName={name}\nExec=/bin/true\n",
+        encoding="utf-8",
+    )
+
+
+def test_acknowledgement_for_the_losing_file_does_not_lift_the_winner():
+    """Consent is bound to the physical winner, not just the desktop ID."""
+    root = DESKTOP_ENTRIES / "id_collision" / "applications"
+    flat = root / "vendor-app.desktop"
+    nested = root / "vendor" / "app.desktop"
+    result = discover_applications(
+        roots=[ApplicationRoot(root, "test")],
+        acknowledged_collisions=[
+            CollisionAcknowledgement("vendor-app.desktop", nested, (flat, nested))
+        ],
+    )
+    app = result.applications["vendor-app.desktop"]
+    assert app.desktop_path == flat
+    assert app.supported_for_import is False
+
+
+def test_acknowledgement_does_not_follow_a_new_physical_winner(tmp_path):
+    """If the lexical/parse winner changes, the stored consent is stale."""
+    root = tmp_path / "applications"
+    first = root / "vendor-app.desktop"
+    second = root / "vendor" / "app.desktop"
+    _write_app(first, "First")
+    _write_app(second, "Second")
+    ack = CollisionAcknowledgement("vendor-app.desktop", first, (first, second))
+
+    lifted = discover_applications(
+        roots=[ApplicationRoot(root, "test")],
+        acknowledged_collisions=[ack],
+    )
+    assert lifted.applications["vendor-app.desktop"].supported_for_import is True
+
+    first.write_text("this is not a desktop entry\n", encoding="utf-8")
+    stale = discover_applications(
+        roots=[ApplicationRoot(root, "test")],
+        acknowledged_collisions=[ack],
+    )
+    app = stale.applications["vendor-app.desktop"]
+    assert app.desktop_path == second
+    assert app.supported_for_import is False
+    assert app.unsupported_code == "desktop_id_collision"
+
+
+def test_acknowledgement_is_invalid_when_the_collision_set_grows(tmp_path):
+    """A new slash/dash encoding of the same ID is a different collision."""
+    root = tmp_path / "applications"
+    first = root / "vendor-app-extra.desktop"
+    second = root / "vendor" / "app-extra.desktop"
+    third = root / "vendor-app" / "extra.desktop"
+    _write_app(first, "First")
+    _write_app(second, "Second")
+    ack = CollisionAcknowledgement(
+        "vendor-app-extra.desktop", first, (first, second)
+    )
+
+    _write_app(third, "Third")
+    result = discover_applications(
+        roots=[ApplicationRoot(root, "test")],
+        acknowledged_collisions=[ack],
+    )
+    app = result.applications["vendor-app-extra.desktop"]
+    assert app.supported_for_import is False
+    assert set(app.collision_paths) == {first, second, third}
+
+
+def test_acknowledgement_is_invalid_when_the_collision_set_shrinks(tmp_path):
+    """A leftover third file going away is still a material set change.
+
+    The remaining pair is a *different* collision than the one that was
+    acknowledged, so consent is required again.
+    """
+    root = tmp_path / "applications"
+    first = root / "vendor-app-extra.desktop"
+    second = root / "vendor" / "app-extra.desktop"
+    third = root / "vendor-app" / "extra.desktop"
+    _write_app(first, "First")
+    _write_app(second, "Second")
+    _write_app(third, "Third")
+    ack = CollisionAcknowledgement(
+        "vendor-app-extra.desktop", first, (first, second, third)
+    )
+    third.unlink()
+    result = discover_applications(
+        roots=[ApplicationRoot(root, "test")],
+        acknowledged_collisions=[ack],
+    )
+    app = result.applications["vendor-app-extra.desktop"]
+    assert app.supported_for_import is False
+    assert set(app.collision_paths) == {first, second}
+
+
+def test_collision_fingerprint_changes_with_winner_or_set(tmp_path):
+    first = tmp_path / "a.desktop"
+    second = tmp_path / "b.desktop"
+    same = collision_fingerprint(first, (first, second))
+    assert same == collision_fingerprint(first, (second, first))
+    assert same != collision_fingerprint(second, (first, second))
+    assert same != collision_fingerprint(first, (first, second, tmp_path / "c.desktop"))
 
 
 def test_open_3_flatpak_file_forwarding_markers_survive_field_code_removal(sources_dir):

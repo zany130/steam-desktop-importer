@@ -101,7 +101,7 @@ desktop ID. Observed for real on the capture host. See CHECKLIST.md OPEN-2.
 
 Discovery resolves this to one entry (`vendor-app.desktop` wins on lexical
 absolute-path order), records a `desktop_id_collision`, and withholds import
-consent until the ID is passed in `acknowledged_collisions`.
+consent until an acknowledgement names that winner and colliding set.
 
 ---
 

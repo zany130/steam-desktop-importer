@@ -8,21 +8,23 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0, 1, 2 and 4 are implemented. Nothing else is.**
+**Phases 0, 1, 2, 3, 4 and 5 are implemented. Nothing else is.**
 
-There is no GUI yet, and no code path writes to a Steam directory. A test
-(`test_package_performs_no_filesystem_writes`) enforces that, in line with the
-Phase 7 rule "do not enable live writes until this phase passes".
+The GUI writes only the importer's SQLite store. The Import button is
+visible and disabled. A test (`test_package_performs_no_filesystem_writes`)
+still enforces that nothing writes to a Steam directory, in line with the
+Phase 7 rule "do not enable live writes until this phase passes". The only
+allowlisted write is creating the state directory.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 0 | Fixtures and format characterization | done |
 | 1 | XDG discovery and Desktop Entry parsing | done |
 | 2 | Launch adapters | done |
-| 3 | GUI | not started |
+| 3 | GUI | done |
 | 4 | Steam install/account discovery | done |
-| 5 | Persistent state and AppID allocation | not started |
-| 6 | VDF read/update | fixtures only |
+| 5 | Persistent state and AppID allocation | done |
+| 6 | VDF read/update | fixtures + read-only identity listing |
 | 7 | Safe VDF commit | not started |
 | 8–11 | SteamGridDB, artwork UI, release gates | not started |
 
@@ -32,6 +34,9 @@ open issues.
 ## What works today
 
 ```bash
+# Open the GUI (read-only; Import is disabled).
+steam-desktop-importer
+
 # Show the ordered applications/ roots that will be scanned.
 steam-desktop-importer debug roots
 
@@ -50,6 +55,9 @@ steam-desktop-importer debug launch          # summary across all entries
 
 # Show Steam installations and accounts. Read-only.
 steam-desktop-importer debug steam
+
+# Show §6/§16 identity for one desktop ID. Never writes Steam or state.
+steam-desktop-importer debug identity org.kde.kate.desktop
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
@@ -74,6 +82,15 @@ three paths that point at it (`~/.local/share/Steam`, `~/.steam/steam`,
 prompt because neither is ambiguous — with two of either, the importer
 preselects but refuses to decide.
 
+Phase 5 adds a SQLite store at `$XDG_STATE_HOME/steam-desktop-importer/`
+and importer-owned AppID allocation. On this host an empty store classifies
+all 804 resolved entries as New. The live `shortcuts.vdf` now has 961
+identities (Phase 0 recorded 783; the added shortcuts were created with
+Steam ROM Manager, not by this importer); none of those AppIDs collide with a
+first-import candidate, and none pair name+exe with a desktop entry, so
+Possible Existing Match is 0. `Imported` means managed in importer state,
+not verified in the VDF.
+
 ## Development
 
 ```bash
@@ -82,8 +99,7 @@ uv pip install -e '.[dev]'
 .venv/bin/python -m pytest
 ```
 
-Phases 0–1 only need `vdf`, `pyxdg` and `pytest`. `PySide6` is declared for
-later phases but is not imported by anything yet.
+Phases 0–1 only need `vdf`, `pyxdg` and `pytest`. The GUI needs `PySide6`.
 
 Regenerate the binary VDF fixtures (they are committed, so this is only needed
 if the generator changes):
@@ -121,7 +137,9 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
 - The desktop ID scheme is not injective, so two files in one root can derive
   the same ID. Discovery breaks the tie deterministically to keep exactly one
   entry per ID, then withholds import consent until the collision is
-  acknowledged, so persistent state is never keyed to an ambiguous ID.
+  acknowledged for that physical winner and colliding set, so persistent
+  state is never keyed to an ambiguous ID. A later scan that resolves a
+  different winner or a different colliding set requires confirmation again.
 - `Hidden=true` masks lower-priority copies; `NoDisplay=true` does not.
 - `env VAR=value` wrappers are preserved verbatim in argv.
 - `StartDir` comes from `Path=` or stays empty; it is never inferred from the

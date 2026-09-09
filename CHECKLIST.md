@@ -2,9 +2,10 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0, 1, 2 and 4 complete. 241 tests passing.**
-No code in this repository writes to any Steam directory, and a test enforces
-that (`test_package_performs_no_filesystem_writes`).
+**Current state: Phases 0, 1, 2, 3, 4 and 5 complete. 318 tests passing.**
+No code in this repository writes to any Steam directory. The write-guard
+test still forbids Steam filesystem writes; the only allowlisted write is
+`Path.mkdir` in `state/store.py` for the importer's own SQLite directory.
 
 Legend: `[x]` done · `[ ]` not started · `[~]` partial
 
@@ -92,12 +93,12 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `debug scan`
 - [x] `debug desktop-entry <path>`
 - [x] `debug launch [desktop-id]` — Phase 2 vectors; never runs or writes
-- [x] `debug steam` — Phase 4 installations and accounts; read-only
+- [x] `debug steam` — Phase 4 installations and accounts, plus §14 running status; read-only
+- [x] `debug identity` — Phase 5; never creates state or writes Steam
 - [ ] `debug dump-shortcuts` — needs Phase 6
-- [ ] `debug identity` — needs Phase 5
 
-Deliberately absent rather than stubbed, so no command can appear to work
-while returning guessed data.
+`debug dump-shortcuts` is deliberately absent rather than stubbed, so no
+command can appear to work while returning guessed data.
 
 ## Phase 2 — Launch adapters (§10)
 
@@ -138,6 +139,42 @@ but not sufficient. The GUI must call the adapter to know an entry is truly
 importable. On the capture host 777 entries are supported and all 777 produce
 a vector, so the gap is currently empty — but it is real and untested against
 a transient AppImage in the wild.
+
+## Phase 3 — Basic GUI (§25)
+
+Complete, and still read-only. `steam-desktop-importer` with no subcommand
+opens the window. The Import button is present and disabled: selection has to
+be exercisable, but writing `shortcuts.vdf` is Phase 7.
+
+- [x] `QTableView` + `QAbstractTableModel` + `QSortFilterProxyModel` (§25.3)
+- [x] Columns: selection, icon, name, source, command, desktop ID, status,
+      In Steam
+- [x] Source and status drawn as badges
+- [x] Text search, source type, NoDisplay, unsupported, current-desktop
+- [x] Steam installation selector; several start on a placeholder (rule 7)
+- [x] Steam account selector; several require the confirmation dialog (rule 8)
+- [x] Steam running indicator (§14), used for display only
+- [x] Refresh off the GUI thread (`QThreadPool` / `QRunnable`, §25.4)
+- [x] Settings control that does not pretend later phases exist
+- [x] Desktop-ID collision acknowledgement (session-only in Phase 3; persisted in Phase 5)
+
+### DEV-12 — Import status was `unknown` until Phase 5
+
+Superseded by DEV-14. Phase 3 showed `unknown` rather than `New` because
+the store did not exist yet. The column now uses the §25.1 statuses.
+
+### DEV-13 — §14 detection exists; it does not gate writes
+
+Phase 3 needed a status indicator, so `steam/running.py` is implemented now
+rather than waiting for Phase 7. A conservative false positive is preferred,
+and an unreadable process makes a *negative* result uncertain. **Nothing
+consults this result before writing**, because nothing writes.
+
+The GUI honours DEV-10: a row is checkable only when `supported_for_import`
+is true *and* `build_launch_vector` succeeds.
+
+Filtering 2 000 synthetic rows is covered by
+`test_filtering_two_thousand_rows_stays_responsive`.
 
 ## Phase 4 — Steam install/account discovery (§12–§13)
 
@@ -194,22 +231,84 @@ all three hints present, resolved without a prompt.
 ### Not yet done, and deliberately so
 
 §13 asks for the chosen account to be persisted per installation and §12 for
-the chosen installation to be remembered. Both selectors accept a remembered
-value and honour it, but **storing** it is Phase 5 (SQLite). Nothing here
-writes.
+the chosen installation to be remembered. Phase 5 now stores both.
 
-`§14 Steam running detection` is *not* implemented. It gates writing, so it
-belongs with Phase 7 rather than here.
+`§14 Steam running detection` is implemented for the Phase 3 indicator
+(DEV-13). Using it to block a VDF write remains Phase 7.
+
+## Phase 5 — Persistent state and AppID allocation (§6, §16, §25.1)
+
+Complete. Steam filesystem writes remain disabled. The store writes only
+`$XDG_STATE_HOME/steam-desktop-importer/state.sqlite3` (fallback
+`~/.local/state/...`). GUI and `save_mapping` never allocate-and-insert in
+one step: §27 requires the VDF commit first, so mappings are persisted only
+when a caller means to. Phase 7 will insert after a successful VDF write.
+Scanning does **not** create mappings.
+
+- [x] SQLite store with the §6 fields and identity
+      `(steam_installation_key, steam_account_id32, desktop_id)`
+- [x] Deterministic first-import candidate
+      (`crc32("steam-desktop-importer\\0" + desktop_id) | 0x80000000`)
+- [x] Collision salts `"\\0collision:N"` against occupied AppIDs
+- [x] Signed/unsigned conversion and `game_id_64`
+- [x] Name / Exec changes keep the persisted AppID
+- [x] Install and account mappings stay separate
+- [x] Remembered installation and per-install account
+- [x] Remembered collision acknowledgements bound to the physical winner and
+      colliding-path fingerprint (still global, not per Steam account)
+- [x] New / Imported / Changed / Possible Existing Match
+- [x] Read-only listing of existing `shortcuts.vdf` identities
+- [x] `debug identity <desktop_id>`
+- [x] Write guard allowlists only `state/store.py` `mkdir`
+
+### Characterization (read-only, 2026-09-09)
+
+In-memory store; real `shortcuts.vdf` opened `rb` only. The real
+`state.sqlite3` did not exist before and was not created. VDF mtime and
+size were unchanged.
+
+| Observation | Value |
+| --- | --- |
+| Resolved desktop entries | 804 |
+| Importable | 777 |
+| Desktop-ID collisions | 1 |
+| Steam install | 1 native (`/var/home/zany130/.local/share/Steam`) |
+| Steam account | `120415481` / `zany130` |
+| Existing shortcut identities | **961** (Phase 0 recorded 783; added later via Steam ROM Manager) |
+| Unique occupied AppIDs | 961, all high-bit |
+| Statuses on an empty store | 804 New, 0 Imported/Changed, 0 Possible Existing Match |
+| First-import candidates vs occupied | 777 free, **0 collisions** |
+
+Possible Existing Match is 0 because the name+exe heuristic never fires on
+this host. 81–94 shortcuts share a desktop `Name=`, but every sampled
+`Exe` is a Unifideck launcher or a Proton `.desktop` path, while the
+corresponding desktop `Exec` is `xdg-open` or an emulator script. That is
+the §17 case: same name is not ownership.
+
+### DEV-14 — Phase 5 may read `shortcuts.vdf`; it must not update it
+
+§16 collision checks and §25.1 Possible Existing Match need existing
+shortcut identities. VDF update/serialize is Phase 6. Phase 5 therefore
+lists identities read-only (`rb` + `vdf.binary_load`) and takes an explicit
+occupied set. An unparsable file is an error, not an empty occupied set.
+
+`Imported` means *managed in importer state*, not *verified present in the
+VDF*. On a fresh store every scoped application is `New`. That is honest:
+this importer has never written. Confirming the VDF row exists is Phase 6.
+
+### Not yet done, and deliberately so
+
+Writing mappings after a successful import is Phase 7. Relink of a
+Possible Existing Match is Phase 6/7 UI. `debug dump-shortcuts` is Phase 6.
 
 ## Not started
 
-Phases 3, 5–11, and §14–§30 in general. Specifically **not** implemented, as
-instructed:
+Phases 6–11, and §15 / §17–§30 in general except the Phase 5 read-only
+identity listing. Specifically **not** implemented, as instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
 - Any Flatpak permission modification (§11, rule 23)
 - Any live `shortcuts.vdf` write (rule 15, Phase 7 gate)
-- GUI (Phase 3)
 
 ---
 
@@ -387,6 +486,12 @@ appear in the wild. Anything else falls back to the key's default with a
 warning, matching GLib. See OPEN-4 for why the fallback direction is not
 always safe.
 
+### DEV-14 — Phase 5 may read `shortcuts.vdf`; it must not update it
+
+See the Phase 5 section. Collision occupancy and Possible Existing Match
+need existing identities; VDF update is Phase 6. `Imported` means managed
+in importer state until Phase 6 can confirm the VDF row.
+
 ---
 
 ## Open issues
@@ -474,8 +579,8 @@ All nine points are in place:
   paths on the resolved entry.
 - `UnsupportedCode.DESKTOP_ID_COLLISION` withholds import consent. It is the
   only *liftable* unsupported code.
-- `discover_applications(acknowledged_collisions=...)` lifts the block while
-  keeping the diagnostic.
+- `discover_applications(acknowledged_collisions=...)` lifts the block only
+  when the acknowledgement still names this winner and colliding set.
 
 Behaviours worth noting, each covered by a test:
 
@@ -485,8 +590,12 @@ Behaviours worth noting, each covered by a test:
   existing "unparsable files do not claim an ID" rule survives collisions.
 - An entry that is **already unsupported** keeps its original reason, since
   that is more useful than the collision; `collision_paths` stays populated.
-- Acknowledgement is currently a per-call argument. Persisting it belongs with
-  §6 state in Phase 5.
+- Acknowledgement is persisted in the Phase 5 store and remains global (a
+  host-filesystem property, not a per-Steam-account one). The row stores the
+  winning source path, the colliding path set, and a fingerprint of both.
+  If a later scan resolves a different winner or a different colliding set,
+  the acknowledgement does not apply and import consent is required again.
+  Desktop-ID-only rows from the first Phase 5 schema are discarded on open.
 
 Verified against the capture host: the real
 `ons-dev.vencord.Vesktop.desktop` collision is detected, blocks import
@@ -614,8 +723,8 @@ required before any of the first two can move out of "experimental". See
 | Hidden masking tests pass | **yes** |
 | Exec grammar fixtures pass | **yes** |
 | env-wrapper tests pass | **yes** |
-| persistent identity/AppID tests pass | not started (Phase 5) |
-| AppID allocation collision tests pass | not started (Phase 5) |
+| persistent identity/AppID tests pass | **yes** — Phase 5 |
+| AppID allocation collision tests pass | **yes** — Phase 5 |
 | desktop-ID collision tests pass | **yes** — see OPEN-2 |
 | VDF round-trip fixtures pass | fixtures exist; round-trip is Phase 6 |
 | atomic-write failure-injection tests pass | not started (Phase 7) |

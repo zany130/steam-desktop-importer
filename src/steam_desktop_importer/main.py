@@ -3,17 +3,17 @@
 IMPLEMENTATION.md §33 asks for project-native debug tooling "rather than
 ad-hoc scripts that guess the first userdata directory".
 
-Only the commands that Phases 1, 2 and 4 can actually support are implemented:
-``debug roots``, ``debug scan``, ``debug desktop-entry``, ``debug launch`` and
-``debug steam``. The remaining §33 commands (``debug dump-shortcuts``, ``debug
-identity``) need Phase 5 and 6 and are deliberately absent rather than
-stubbed, so that no command can appear to work while returning guessed data.
+Implemented: ``debug roots``, ``debug scan``, ``debug desktop-entry``,
+``debug launch``, ``debug steam`` and ``debug identity``.
+``debug dump-shortcuts`` still needs Phase 6 and is deliberately absent
+rather than stubbed.
 
 ``debug launch`` prints the command a shortcut *would* use. It never executes
 it and never writes to Steam. ``debug steam`` reads Steam's configuration and
 never writes to it.
 
-There is no GUI yet. §31 puts the GUI at Phase 3.
+With no subcommand the PySide6 GUI starts. It is also read-only: the Import
+button is present and disabled.
 """
 
 from __future__ import annotations
@@ -30,11 +30,25 @@ from .desktop.discovery import (
 from .desktop.parser import DesktopEntryError, build_application, parse_desktop_entry
 from .launch import LaunchAdapterError, build_launch_vector
 from .models import DesktopApplication
+from .state import (
+    StateStore,
+    current_exec,
+    current_name,
+    default_state_path,
+    import_status,
+)
 from .steam import (
+    allocate_appid,
+    detect_steam_running,
     discover_accounts,
     discover_installations,
+    first_import_candidate,
+    game_id_64,
+    list_existing_shortcuts,
     select_account,
     select_installation,
+    shortcuts_vdf_path,
+    uint32_to_int32,
 )
 
 
@@ -218,6 +232,16 @@ def _print_steam(args: argparse.Namespace) -> int:
     print(f"selection           {selection.reason}")
     print(f"needs confirmation  {selection.requires_confirmation}")
 
+    running = detect_steam_running()
+    if running.running:
+        print(f"steam process       running ({'; '.join(running.evidence)})")
+    elif not running.is_certain:
+        print(
+            f"steam process       unclear ({running.inspection_failures} processes unreadable)"
+        )
+    else:
+        print("steam process       not running")
+
     for installation in installations:
         print()
         print(f"accounts in {installation.root}")
@@ -240,6 +264,96 @@ def _print_steam(args: argparse.Namespace) -> int:
     # without the user, so say so rather than letting the marker imply consent.
     print()
     print("* = preselected. Nothing is chosen until confirmed (rules 7 and 8).")
+    return 0
+
+
+def _print_identity(args: argparse.Namespace) -> int:
+    """Show §33 identity for one desktop ID. Never writes Steam or state."""
+    result = discover_applications()
+    app = result.applications.get(args.desktop_id)
+    if app is None:
+        print(f"error: no resolved entry with desktop ID {args.desktop_id!r}", file=sys.stderr)
+        return 1
+
+    store = StateStore(default_state_path(), create=False)
+    installations = discover_installations()
+    installation_selection = select_installation(
+        installations, remembered_key=store.remembered_installation()
+    )
+    installation = installation_selection.selected
+    account = None
+    existing = None
+    occupied: set[int] = set()
+
+    print(f"desktop ID          {app.desktop_id}")
+    print(f"current Name        {current_name(app)}")
+    print(f"current Exec        {current_exec(app)}")
+
+    if installation is None:
+        print("Steam installation  (none found)")
+        print("account             (none)")
+    else:
+        confirmed = "confirmed" if installation_selection.is_resolved else "unconfirmed preselection"
+        print(f"Steam installation  {installation.key} ({confirmed})")
+        print(f"                    {installation_selection.reason}")
+        accounts = discover_accounts(installation)
+        account_selection = select_account(
+            accounts,
+            remembered_account_id32=store.remembered_account(installation.key),
+        )
+        account = account_selection.selected
+        if account is None:
+            print("account             (none)")
+        else:
+            account_state = (
+                "confirmed" if account_selection.is_resolved else "unconfirmed preselection"
+            )
+            label = account.persona_name or account.account_name or "(unknown)"
+            print(f"account             {account.account_id32}  {label} ({account_state})")
+            print(f"                    {account_selection.reason}")
+
+    mapping = None
+    if installation is not None and account is not None:
+        mapping = store.get_mapping(installation.key, account.account_id32, app.desktop_id)
+        occupied = store.occupied_appids(installation.key, account.account_id32)
+        vdf_path = shortcuts_vdf_path(account)
+        try:
+            existing = list_existing_shortcuts(vdf_path)
+        except ValueError as error:
+            print(f"shortcuts.vdf       <unparsable: {error}>")
+            print("                    occupied AppIDs from VDF are unknown; not treated as empty")
+            existing = None
+        else:
+            print(f"shortcuts.vdf       {vdf_path} ({len(existing)} identities, read-only)")
+            occupied = occupied | {item.appid_unsigned for item in existing}
+
+    if mapping is not None:
+        unsigned = mapping.steam_appid_unsigned
+        print(f"persisted AppID     {unsigned} (0x{unsigned:08x})")
+        print(f"signed VDF          {uint32_to_int32(unsigned)}")
+        print(f"game_id_64          {game_id_64(unsigned)}")
+        print(f"import status       {import_status(app, mapping, existing or ())}")
+    else:
+        candidate = first_import_candidate(app.desktop_id)
+        print("persisted AppID     (none — this importer has never written a mapping)")
+        print(f"first-import cand.  {candidate} (0x{candidate:08x})")
+        if existing is None and installation is not None and account is not None:
+            shown = candidate
+            print("allocated AppID     (not computed; existing VDF identities are unknown)")
+        elif installation is None or account is None:
+            shown = candidate
+            print(f"allocated AppID     {candidate} (0x{candidate:08x}) (no Steam target)")
+        else:
+            shown = allocate_appid(app.desktop_id, occupied)
+            if shown != candidate:
+                print(f"allocated AppID     {shown} (0x{shown:08x}) (candidate collided)")
+            else:
+                print(f"allocated AppID     {shown} (0x{shown:08x}) (candidate is free)")
+        print(f"signed VDF          {uint32_to_int32(shown)}")
+        print(f"game_id_64          {game_id_64(shown)}")
+        print(f"import status       {import_status(app, None, existing or ())}")
+        print("                    Imported means managed in state, not verified in VDF.")
+    store.close()
     return 0
 
 
@@ -289,13 +403,20 @@ def _print_launch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_gui(_args: argparse.Namespace) -> int:
+    from .ui.main_window import run_app
+
+    return run_app()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="steam-desktop-importer",
         description="Import .desktop applications into Steam as non-Steam shortcuts. "
-        "Phases 0-1 are implemented: discovery and parsing only, no Steam writes.",
+        "With no subcommand, opens the GUI. Nothing writes to Steam.",
     )
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands = parser.add_subparsers(dest="command", required=False)
+    parser.set_defaults(func=_run_gui)
 
     debug = subcommands.add_parser("debug", help="inspection commands that never mutate state")
     debug_commands = debug.add_subparsers(dest="debug_command", required=True)
@@ -333,6 +454,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="show Steam installations and accounts (Phase 4); read-only",
     )
     steam.set_defaults(func=_print_steam)
+
+    identity = debug_commands.add_parser(
+        "identity",
+        help="show §6/§16 identity for one desktop ID (Phase 5); never writes",
+    )
+    identity.add_argument("desktop_id")
+    identity.set_defaults(func=_print_identity)
 
     return parser
 
