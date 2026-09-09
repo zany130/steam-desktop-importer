@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+# GUI tests construct QApplication. Offscreen keeps them display-independent
+# and stops a leftover window from grabbing the session.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 

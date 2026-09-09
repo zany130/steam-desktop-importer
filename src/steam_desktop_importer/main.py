@@ -3,7 +3,7 @@
 IMPLEMENTATION.md §33 asks for project-native debug tooling "rather than
 ad-hoc scripts that guess the first userdata directory".
 
-Only the commands that Phases 1, 2 and 4 can actually support are implemented:
+Only the commands that Phases 1, 2, 3 and 4 can actually support are implemented:
 ``debug roots``, ``debug scan``, ``debug desktop-entry``, ``debug launch`` and
 ``debug steam``. The remaining §33 commands (``debug dump-shortcuts``, ``debug
 identity``) need Phase 5 and 6 and are deliberately absent rather than
@@ -13,7 +13,8 @@ stubbed, so that no command can appear to work while returning guessed data.
 it and never writes to Steam. ``debug steam`` reads Steam's configuration and
 never writes to it.
 
-There is no GUI yet. §31 puts the GUI at Phase 3.
+With no subcommand the PySide6 GUI starts. It is also read-only: the Import
+button is present and disabled.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from .desktop.parser import DesktopEntryError, build_application, parse_desktop_
 from .launch import LaunchAdapterError, build_launch_vector
 from .models import DesktopApplication
 from .steam import (
+    detect_steam_running,
     discover_accounts,
     discover_installations,
     select_account,
@@ -218,6 +220,16 @@ def _print_steam(args: argparse.Namespace) -> int:
     print(f"selection           {selection.reason}")
     print(f"needs confirmation  {selection.requires_confirmation}")
 
+    running = detect_steam_running()
+    if running.running:
+        print(f"steam process       running ({'; '.join(running.evidence)})")
+    elif not running.is_certain:
+        print(
+            f"steam process       unclear ({running.inspection_failures} processes unreadable)"
+        )
+    else:
+        print("steam process       not running")
+
     for installation in installations:
         print()
         print(f"accounts in {installation.root}")
@@ -289,13 +301,20 @@ def _print_launch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_gui(_args: argparse.Namespace) -> int:
+    from .ui.main_window import run_app
+
+    return run_app()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="steam-desktop-importer",
         description="Import .desktop applications into Steam as non-Steam shortcuts. "
-        "Phases 0-1 are implemented: discovery and parsing only, no Steam writes.",
+        "With no subcommand, opens the Phase 3 GUI. Nothing writes to Steam.",
     )
-    subcommands = parser.add_subparsers(dest="command", required=True)
+    subcommands = parser.add_subparsers(dest="command", required=False)
+    parser.set_defaults(func=_run_gui)
 
     debug = subcommands.add_parser("debug", help="inspection commands that never mutate state")
     debug_commands = debug.add_subparsers(dest="debug_command", required=True)

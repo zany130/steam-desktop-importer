@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0, 1, 2 and 4 complete. 241 tests passing.**
+**Current state: Phases 0, 1, 2, 3 and 4 complete. 273 tests passing.**
 No code in this repository writes to any Steam directory, and a test enforces
 that (`test_package_performs_no_filesystem_writes`).
 
@@ -92,7 +92,7 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `debug scan`
 - [x] `debug desktop-entry <path>`
 - [x] `debug launch [desktop-id]` — Phase 2 vectors; never runs or writes
-- [x] `debug steam` — Phase 4 installations and accounts; read-only
+- [x] `debug steam` — Phase 4 installations and accounts, plus §14 running status; read-only
 - [ ] `debug dump-shortcuts` — needs Phase 6
 - [ ] `debug identity` — needs Phase 5
 
@@ -138,6 +138,44 @@ but not sufficient. The GUI must call the adapter to know an entry is truly
 importable. On the capture host 777 entries are supported and all 777 produce
 a vector, so the gap is currently empty — but it is real and untested against
 a transient AppImage in the wild.
+
+## Phase 3 — Basic GUI (§25)
+
+Complete, and still read-only. `steam-desktop-importer` with no subcommand
+opens the window. The Import button is present and disabled: selection has to
+be exercisable, but writing `shortcuts.vdf` is Phase 7.
+
+- [x] `QTableView` + `QAbstractTableModel` + `QSortFilterProxyModel` (§25.3)
+- [x] Columns: selection, icon, name, source, command, desktop ID, status,
+      In Steam
+- [x] Source and status drawn as badges
+- [x] Text search, source type, NoDisplay, unsupported, current-desktop
+- [x] Steam installation selector; several start on a placeholder (rule 7)
+- [x] Steam account selector; several require the confirmation dialog (rule 8)
+- [x] Steam running indicator (§14), used for display only
+- [x] Refresh off the GUI thread (`QThreadPool` / `QRunnable`, §25.4)
+- [x] Settings control that does not pretend later phases exist
+- [x] Desktop-ID collision acknowledgement for the rest of the session
+
+### DEV-12 — Import status is `unknown`, not `New`
+
+§25.1's `New` / `Imported` / `Changed` / `Possible Existing Match` need the
+Phase 5 store and the Phase 6 VDF reader. Showing `New` would claim the
+capture host has no shortcuts; it has 783. The imported/not-imported filter
+is visible and disabled for the same reason.
+
+### DEV-13 — §14 detection exists; it does not gate writes
+
+Phase 3 needed a status indicator, so `steam/running.py` is implemented now
+rather than waiting for Phase 7. A conservative false positive is preferred,
+and an unreadable process makes a *negative* result uncertain. **Nothing
+consults this result before writing**, because nothing writes.
+
+The GUI honours DEV-10: a row is checkable only when `supported_for_import`
+is true *and* `build_launch_vector` succeeds.
+
+Filtering 2 000 synthetic rows is covered by
+`test_filtering_two_thousand_rows_stays_responsive`.
 
 ## Phase 4 — Steam install/account discovery (§12–§13)
 
@@ -198,18 +236,17 @@ the chosen installation to be remembered. Both selectors accept a remembered
 value and honour it, but **storing** it is Phase 5 (SQLite). Nothing here
 writes.
 
-`§14 Steam running detection` is *not* implemented. It gates writing, so it
-belongs with Phase 7 rather than here.
+`§14 Steam running detection` is implemented for the Phase 3 indicator
+(DEV-13). Using it to block a VDF write remains Phase 7.
 
 ## Not started
 
-Phases 3, 5–11, and §14–§30 in general. Specifically **not** implemented, as
+Phases 5–11, and §15–§30 in general. Specifically **not** implemented, as
 instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
 - Any Flatpak permission modification (§11, rule 23)
 - Any live `shortcuts.vdf` write (rule 15, Phase 7 gate)
-- GUI (Phase 3)
 
 ---
 

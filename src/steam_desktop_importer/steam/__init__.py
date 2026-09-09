@@ -23,6 +23,7 @@ from .installations import (
     is_steam_root,
     select_installation,
 )
+from .running import SteamRunningStatus, detect_steam_running
 
 __all__ = [
     "FLATPAK_STEAM_APP_ID",
@@ -30,7 +31,9 @@ __all__ = [
     "STEAMID64_BASE",
     "AccountSelection",
     "InstallationSelection",
+    "SteamRunningStatus",
     "account_id32_to_steam_id64",
+    "detect_steam_running",
     "discover_accounts",
     "discover_installations",
     "is_steam_root",

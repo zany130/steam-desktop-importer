@@ -8,18 +8,19 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0, 1, 2 and 4 are implemented. Nothing else is.**
+**Phases 0, 1, 2, 3 and 4 are implemented. Nothing else is.**
 
-There is no GUI yet, and no code path writes to a Steam directory. A test
-(`test_package_performs_no_filesystem_writes`) enforces that, in line with the
-Phase 7 rule "do not enable live writes until this phase passes".
+The GUI is read-only. The Import button is visible and disabled. A test
+(`test_package_performs_no_filesystem_writes`) still enforces that nothing
+writes to a Steam directory, in line with the Phase 7 rule "do not enable
+live writes until this phase passes".
 
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 0 | Fixtures and format characterization | done |
 | 1 | XDG discovery and Desktop Entry parsing | done |
 | 2 | Launch adapters | done |
-| 3 | GUI | not started |
+| 3 | GUI | done |
 | 4 | Steam install/account discovery | done |
 | 5 | Persistent state and AppID allocation | not started |
 | 6 | VDF read/update | fixtures only |
@@ -32,6 +33,9 @@ open issues.
 ## What works today
 
 ```bash
+# Open the GUI (read-only; Import is disabled).
+steam-desktop-importer
+
 # Show the ordered applications/ roots that will be scanned.
 steam-desktop-importer debug roots
 
@@ -82,8 +86,7 @@ uv pip install -e '.[dev]'
 .venv/bin/python -m pytest
 ```
 
-Phases 0–1 only need `vdf`, `pyxdg` and `pytest`. `PySide6` is declared for
-later phases but is not imported by anything yet.
+Phases 0–1 only need `vdf`, `pyxdg` and `pytest`. The GUI needs `PySide6`.
 
 Regenerate the binary VDF fixtures (they are committed, so this is only needed
 if the generator changes):
