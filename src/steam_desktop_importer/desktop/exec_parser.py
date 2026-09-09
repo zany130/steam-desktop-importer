@@ -37,6 +37,7 @@ __all__ = [
     "tokenize_exec",
     "unescape_entry_value",
     "uses_env_wrapper",
+    "uses_shell_quote_escaping",
 ]
 
 PARSE_MODE_STRICT = "strict"
@@ -118,6 +119,13 @@ class ExecParseResult:
 
     parse_mode: str = PARSE_MODE_STRICT
     """Which tokenizer produced ``tokens``. See :func:`parse_exec`."""
+
+    ambiguous_quoting: bool = False
+    """``argv`` is known to be wrong and must not be used to launch anything.
+
+    Set when the value uses shell-level quote escaping that neither tokenizer
+    implements. See :func:`uses_shell_quote_escaping` and CHECKLIST DEV-9.
+    """
 
     @property
     def nonstandard(self) -> bool:
@@ -332,6 +340,55 @@ def looks_like_shell_single_quoting(value: str) -> bool:
     return True
 
 
+def uses_shell_quote_escaping(value: str) -> bool:
+    r"""Whether ``value`` escapes a single quote at *shell* level.
+
+    Detects a backslash immediately followed by ``'`` outside any
+    double-quoted region. In practice this is the POSIX ``'\''`` idiom for
+    embedding a literal quote inside a single-quoted string, as in
+
+    .. code-block:: text
+
+        sh -c '/usr/libexec/service -o '\''%u'\'''
+
+    which a shell reads as the single argument ``/usr/libexec/service -o
+    '%u'``. Neither tokenizer produces that. The strict grammar splits the
+    value on the spaces inside the intended quoting, and the compatibility
+    tokenizer emits literal backslashes where the quotes belong, because
+    POSIX unquoted-backslash escaping is deliberately not implemented.
+
+    Parsing it correctly means adding a second shell rule to the compatibility
+    grammar, which currently deviates from the specification in exactly one
+    respect. There is one real sample to validate that against, so instead of
+    guessing, entries matching this predicate are marked unsupported and the
+    argv is never used. See CHECKLIST DEV-9.
+
+    ``value`` must already have had its string-value escapes resolved.
+    """
+    index = 0
+    length = len(value)
+    in_double = False
+
+    while index < length:
+        char = value[index]
+        if in_double:
+            if char == "\\" and index + 1 < length and value[index + 1] in _QUOTE_ESCAPABLE:
+                index += 2
+                continue
+            if char == '"':
+                in_double = False
+            index += 1
+            continue
+        if char == '"':
+            in_double = True
+            index += 1
+            continue
+        if char == "\\" and index + 1 < length and value[index + 1] == "'":
+            return True
+        index += 1
+    return False
+
+
 def _expand_token(
     token: str,
     was_quoted: bool,
@@ -517,6 +574,16 @@ def parse_exec(
                 "used and the entry is marked nonstandard"
             )
 
+    ambiguous_quoting = uses_shell_quote_escaping(unescaped)
+    if ambiguous_quoting:
+        tokenize_warnings = list(tokenize_warnings)
+        tokenize_warnings.append(
+            "Exec escapes a single quote at shell level (the '\\'' idiom); "
+            "neither the strict nor the compatibility grammar reproduces what "
+            "a shell would do here, so the resulting argv is known to be "
+            "incorrect and must not be used to launch anything"
+        )
+
     report = _Report(warnings=list(tokenize_warnings))
     argv: list[str] = []
     for token, was_quoted in zip(tokens, quoted_flags):
@@ -540,6 +607,7 @@ def parse_exec(
         dropped_tokens=tuple(report.dropped),
         warnings=tuple(report.warnings),
         parse_mode=parse_mode,
+        ambiguous_quoting=ambiguous_quoting,
     )
 
 

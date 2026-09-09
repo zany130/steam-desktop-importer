@@ -17,6 +17,7 @@ from .exec_parser import (
     parse_exec,
     tokenize_exec,
     unescape_entry_value,
+    uses_shell_quote_escaping,
 )
 from .icons import resolve_icon
 from .parser import (
@@ -50,4 +51,5 @@ __all__ = [
     "resolve_icon",
     "tokenize_exec",
     "unescape_entry_value",
+    "uses_shell_quote_escaping",
 ]

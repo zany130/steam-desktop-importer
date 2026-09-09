@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phase 0 and Phase 1 complete. 181 tests passing.**
+**Current state: Phase 0 and Phase 1 complete. 188 tests passing.**
 No code in this repository writes to any Steam directory, and a test enforces
 that (`test_package_performs_no_filesystem_writes`).
 
@@ -217,7 +217,7 @@ this correctly separates three classes:
 | --- | --- | --- |
 | Shell quoting | `-b 'EMU Stuff'` | 32 entries → **compat**, argv fixed |
 | Quotes inside double quotes | `bash -c "'/path/x.sh'"` | 17 entries → **strict**, already correct |
-| `'\''` escape idiom | `-c '/bin/svc -o '\''%u'\'''` | 1 entry → **strict**, needs a real shell parser; reported via warnings |
+| `'\''` escape idiom | `-c '/bin/svc -o '\''%u'\'''` | 1 entry → **strict**, argv known wrong → refused, see DEV-9 |
 | Apostrophes | `don't`, `it's a b's` | → **strict**, a shell parser would corrupt these |
 
 Note the fourth row: `it's a b's` has *balanced* quotes, so a naive balance
@@ -226,6 +226,54 @@ what prevents that.
 
 Verified on the capture host: 0 entries flipped to compat without their argv
 actually changing, and parse errors stayed at 0.
+
+### DEV-9 — Shell quote-escaping makes an entry unsupported
+
+Contains OPEN-7. Follows from DEV-8's fourth class.
+
+DEV-8 left the `'\''` idiom to the strict grammar and reported the damage
+through warnings. That is not sufficient: the argv is not merely unusual, it
+is **known to be wrong**, and a warning does not stop Phase 2 from importing
+it and creating a broken shortcut.
+
+The real entry, `com.stremio.Service` on the capture host, reduces to:
+
+```text
+Exec=... --command=sh com.example.Service -c '/usr/bin/service -o '\''%u'\'''
+```
+
+A shell reads the `-c` operand as exactly one argument,
+`/usr/bin/service -o '%u'`. Both tokenizers disagree, in different ways:
+
+| Tokenizer | Result | Wrong how |
+| --- | --- | --- |
+| strict | `... -c` `'/usr/bin/service` `-o` | splits inside the intended quoting, drops the tail, keeps a stray quote |
+| compat | `... -c` `/usr/bin/service -o \%u\` | literal backslashes where the quotes belong |
+
+**Decision: refuse the entry.** `uses_shell_quote_escaping()` detects a
+backslash immediately preceding `'` outside any double-quoted region.
+`ExecParseResult.ambiguous_quoting` carries the flag and
+`UnsupportedCode.EXEC_AMBIGUOUS_QUOTING` makes the entry unimportable. It is
+checked *before* `Terminal=` and `TryExec=` so the reported reason is the real
+one; a "binary not found" message would send the user to fix the wrong thing.
+The entry stays **available** — nothing about the system needs repairing —
+and is reported as unsupported.
+
+#### Why not parse it
+
+Compat currently deviates from the specification in exactly one respect: `'`
+opens a literal region. Handling this idiom needs a second deviation, POSIX
+unquoted-backslash escaping, and there is **one** real sample to validate it
+against. Guessing at shell semantics on n=1 is what the non-negotiable rules
+exist to prevent. Refusing is reversible and cannot produce a wrong launch.
+
+Adding the parser later is a contained change: extend the compat tokenizer
+with unquoted `\X` → literal `X`, extend `looks_like_shell_single_quoting()`
+to accept quotes adjacent to an escaped quote, and drop the flag. It needs
+more real samples first.
+
+Verified on the capture host: exactly 1 of 804 entries is refused, the 32
+compat entries are unaffected, and importable moved 778 → 777.
 
 ### DEV-7 — Lenient boolean handling
 
@@ -249,18 +297,22 @@ deliberate.
 | OPEN-2 desktop ID collisions | medium | **resolved** — implemented |
 | OPEN-2a does a collision block import? | medium | **resolved** — implemented |
 | OPEN-3 Flatpak file-forwarding markers | medium | **decided** — Phase 2 |
-| OPEN-4 invalid booleans | low | default proposed |
+| OPEN-4 malformed booleans | low | **open** — conservative `Hidden` policy needed before release |
 | OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
 | OPEN-6 `LastPlayTime` for new shortcuts | low | default proposed |
+| OPEN-7 shell quote-escaping in `Exec=` | medium | **contained** → DEV-9; entry refused, parser optional |
 
 ### ~~OPEN-1 — Single quotes~~
 
 **Resolved. See DEV-8.**
 
-### OPEN-2 — Desktop IDs are not unique
+### ~~OPEN-2 — Desktop IDs are not unique~~
 
-**Severity: medium. Affects §6 persistent state. Decided 2026-09-09, with one
-point still to confirm — see OPEN-2a.**
+**Resolved 2026-09-09, including OPEN-2a. Implemented and covered by tests.**
+
+Kept in full below because the resolution is a deliberate design decision
+about §6's identity model, not a bug fix, and the reasoning needs to stay
+available to Phase 5.
 
 The FreeDesktop scheme replaces `/` with `-` and does not escape existing
 dashes, so `vendor/app.desktop` and `vendor-app.desktop` in the same root
@@ -274,7 +326,7 @@ moment the state row is unambiguous. The danger is **over time** — if the
 winning file is removed, the shadowed file inherits the winner's Steam AppID
 and the user's shortcut silently starts launching a different application.
 
-#### Settled
+#### Resolution
 
 1. §6's state key is **unchanged**: `(steam_installation_key,
    steam_account_id32, desktop_id)`. No deviation.
@@ -289,7 +341,7 @@ and the user's shortcut silently starts launching a different application.
    colliding source path** for debugging.
 7. Colliding physical files never get **separate Steam-AppID state rows**.
 
-#### OPEN-2a — Does a collision block import? (decided 2026-09-09)
+#### ~~OPEN-2a — Does a collision block import?~~ (resolved 2026-09-09)
 
 Identity and importability are **separate concerns**:
 
@@ -362,13 +414,25 @@ adapter should still get a test proving the stripped command launches.
 
 ### OPEN-4 — Invalid booleans fall back in an unsafe direction
 
-**Severity: low. Proposed default accepted unless objected to: keep current
-behaviour, which matches GLib exactly.**
+**Severity: low. Deliberately deferred, but must stay open: a conservative
+malformed-`Hidden` policy is required before release.**
 
 `Terminal='False'` appears on the capture host (7 entries). Quoted values are
 invalid, so they fall back to the default. Here that happens to be correct,
 but `Hidden='True'` would fall back to `False` and un-mask an entry the
 packager intended to hide. §8 does not discuss invalid values.
+
+Current behaviour is unchanged and matches GLib. That is fine for `Terminal`
+and `NoDisplay`, where a wrong fallback is cosmetic, but not for `Hidden`,
+which is a **masking** key: getting it wrong resurrects an entry someone
+deliberately hid, and the importer would then offer it for import.
+
+The asymmetry to resolve before release: an unparsable `Hidden` value should
+probably be treated as masking, or at least as "do not offer for import",
+rather than silently defaulting to `False`. Not changed yet because no
+malformed `Hidden` has been observed in the wild, so there is no evidence for
+which direction real packagers intend. **Release gate: decide this
+explicitly; do not let the GLib default stand by omission.**
 
 ### OPEN-5 — "missing `TryExec`" is ambiguous in the Phase 1 fixture list
 
@@ -419,11 +483,13 @@ required before any of the first two can move out of "experimental". See
 | Exec grammar fixtures pass | **yes** |
 | env-wrapper tests pass | **yes** |
 | persistent identity/AppID tests pass | not started (Phase 5) |
-| collision tests pass | not started (Phase 5) |
+| AppID allocation collision tests pass | not started (Phase 5) |
+| desktop-ID collision tests pass | **yes** — see OPEN-2 |
 | VDF round-trip fixtures pass | fixtures exist; round-trip is Phase 6 |
 | atomic-write failure-injection tests pass | not started (Phase 7) |
 | native Steam end-to-end import passes | not started (Phase 10) |
 | unrelated shortcuts survive repeated imports | not started (Phase 10) |
+| malformed-`Hidden` policy decided (OPEN-4) | **no** — must not ship by omission |
 | backups are recoverable | not started (Phase 7) |
 | unsigned 32-bit artwork naming confirmed | **yes** — 565/565 on real data |
 | SteamGridDB failures cannot corrupt Steam state | not started (Phase 8) |

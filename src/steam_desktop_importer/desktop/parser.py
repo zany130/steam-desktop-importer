@@ -560,6 +560,20 @@ def _determine_support(parsed: ParsedEntry) -> tuple[bool, str | None, str | Non
             UnsupportedCode.EXEC_EMPTY_AFTER_EXPANSION,
         )
 
+    if parsed.exec_result.ambiguous_quoting:
+        # Checked before Terminal= and TryExec=: this is not "we declined to
+        # support it", it is "the argv we computed is wrong". Reporting a
+        # missing binary here would send the user to fix the wrong thing.
+        return (
+            False,
+            (
+                "Exec escapes a single quote at shell level; the parsed command "
+                "is known to be incorrect, so importing it would create a "
+                "broken shortcut"
+            ),
+            UnsupportedCode.EXEC_AMBIGUOUS_QUOTING,
+        )
+
     if parsed.terminal:
         return (
             False,

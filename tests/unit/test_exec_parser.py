@@ -14,8 +14,9 @@ from steam_desktop_importer.desktop.exec_parser import (
     tokenize_exec,
     unescape_entry_value,
     uses_env_wrapper,
+    uses_shell_quote_escaping,
 )
-from steam_desktop_importer.desktop.parser import parse_desktop_entry
+from steam_desktop_importer.desktop.parser import build_application, parse_desktop_entry
 
 
 def argv_of(directory, filename, locale=None):
@@ -172,6 +173,59 @@ def test_posix_quote_escape_idiom_is_not_recognised(exec_grammar_dir):
     # The mangling is reported rather than passed off as a clean parse.
     assert any("single quote" in warning for warning in result.warnings)
     assert any("dropped token" in warning for warning in result.warnings)
+
+    # ... and, because the argv is known to be wrong rather than merely
+    # unusual, the value is flagged so support determination can refuse it.
+    # A warning alone would still leave a broken command importable.
+    assert result.ambiguous_quoting is True
+
+
+def test_quote_escape_idiom_produces_a_demonstrably_wrong_argv(exec_grammar_dir):
+    r"""Pin *why* this construct is refused rather than parsed.
+
+    A shell reads ``-c '/usr/bin/service -o '\''%u'\'''`` as one argument,
+    ``/usr/bin/service -o '%u'``. Both tokenizers here disagree with that, in
+    different ways, which is the evidence behind DEV-9.
+    """
+    result = argv_of(exec_grammar_dir, "exec-single-quote-escape-idiom.desktop")
+
+    # Strict splits on the spaces inside the intended quoting and loses the
+    # tail entirely, leaving a stray leading quote on the path.
+    assert result.argv[-2:] == ("'/usr/bin/service", "-o")
+
+    # Compat is wrong differently: it emits literal backslashes where the
+    # quotes belong, because POSIX unquoted-backslash escaping is not
+    # implemented. Neither output may be launched.
+    compat = tokenize_exec(result.raw, honour_single_quotes=True)
+    assert compat[-1] == "/usr/bin/service -o \\%u\\"
+
+
+def test_quote_escape_idiom_makes_the_entry_unsupported(exec_grammar_dir):
+    """DEV-9: a known-wrong argv must not be importable in Phase 2."""
+    path = exec_grammar_dir / "exec-single-quote-escape-idiom.desktop"
+    app = build_application(parse_desktop_entry(path), desktop_id=path.name)
+
+    assert app.supported_for_import is False
+    assert app.unsupported_code == "exec_ambiguous_quoting"
+    # "Unsupported", not "Unavailable": nothing about the system needs fixing.
+    assert app.is_available is True
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (r"sh -c 'a '\''b'\'''", True),
+        (r"sh -c 'plain quoting'", False),
+        (r"echo don't", False),
+        # Inside double quotes a backslash-quote is ordinary Desktop Entry
+        # text, not shell escaping, so it must not trip the detector.
+        (r'sh -c "it\'s fine"', False),
+        (r"/usr/bin/app", False),
+    ],
+)
+def test_shell_quote_escaping_detection_is_narrow(value, expected):
+    """The detector must catch the idiom without flagging ordinary values."""
+    assert uses_shell_quote_escaping(unescape_entry_value(value)) is expected
 
 
 def test_nothing_is_escapable_inside_a_single_quoted_region():

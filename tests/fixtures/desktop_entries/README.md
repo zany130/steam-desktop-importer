@@ -60,7 +60,7 @@ or modelled on entries observed on the capture host.
 | `exec-single-quote-shell-style` | `-b 'EMU Stuff'` (Bottles) | **compat**, `nonstandard_exec=True` |
 | `exec-single-quote-shell-script` | `sh -c '<script with spaces and double quotes>'` | **compat**, whole script stays one argument |
 | `exec-single-quote-inside-double` | `bash -c "'/path/x.sh'"` (WineZGUI) | **strict** — both grammars agree, already correct |
-| `exec-single-quote-escape-idiom` | `-c '/bin/svc -o '\''%u'\'''` (Stremio) | **strict** — needs a real shell parser, reported via warnings |
+| `exec-single-quote-escape-idiom` | `-c '/bin/svc -o '\''%u'\'''` (Stremio) | **strict**, but argv is known wrong → entry refused (DEV-9) |
 | `exec-single-quote-apostrophe` | `it's a b's` | **strict** — quotes balance, but a shell parser would corrupt this |
 
 ## `entry_semantics/applications/`

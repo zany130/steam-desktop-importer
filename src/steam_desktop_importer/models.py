@@ -41,6 +41,12 @@ class UnsupportedCode:
     NO_EXEC = "no_exec"
     EXEC_UNPARSABLE = "exec_unparsable"
     EXEC_EMPTY_AFTER_EXPANSION = "exec_empty_after_expansion"
+    EXEC_AMBIGUOUS_QUOTING = "exec_ambiguous_quoting"
+    """``Exec`` uses shell-level quote escaping that no tokenizer here handles.
+
+    The entry parses, but its argv is *known* to be wrong, so it is refused
+    rather than launched incorrectly. See CHECKLIST DEV-9.
+    """
     TERMINAL_UNSUPPORTED = "terminal_unsupported"
     DBUS_ACTIVATABLE_NO_EXEC = "dbus_activatable_no_exec"
     DESKTOP_ID_COLLISION = "desktop_id_collision"

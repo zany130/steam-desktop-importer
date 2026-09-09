@@ -46,9 +46,10 @@ steam-desktop-importer debug desktop-entry /usr/share/applications/org.kde.kate.
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
-4 masked by `Hidden=true`, 9 shadowed lower-priority copies, 32 entries whose
-`Exec=` uses non-standard single-quote quoting, and 1 desktop ID collision
-(which is held back from import, leaving 778 importable).
+4 masked by `Hidden=true`, 9 shadowed lower-priority copies, and 32 entries
+whose `Exec=` uses non-standard single-quote quoting. Two entries are held
+back from import, leaving 777 importable: one desktop ID collision and one
+`Exec=` whose shell quote-escaping we cannot parse correctly.
 
 ## Development
 
@@ -89,6 +90,10 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
   parsing is never global: it is retried per entry, only for a recognised
   non-standard quoting pattern that the strict grammar would mis-tokenize, and
   the entry is then marked `nonstandard_exec` / `exec_parse_mode="compat"`.
+- When neither grammar can reproduce what a shell would do — currently the
+  POSIX `'\''` quote-escaping idiom — the entry is marked unsupported rather
+  than launched with an argv that is known to be wrong. A warning alone is not
+  enough to keep a broken command out of Steam.
 - Applications are keyed by FreeDesktop desktop ID, never by basename.
 - The desktop ID scheme is not injective, so two files in one root can derive
   the same ID. Discovery breaks the tie deterministically to keep exactly one
