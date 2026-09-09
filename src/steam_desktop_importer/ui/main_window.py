@@ -109,7 +109,7 @@ class MainWindow(QMainWindow):
             except OSError:
                 self._store = StateStore(":memory:")
                 self._store_fallback = True
-        self._acknowledged: set[str] = set(self._store.acknowledged_collisions())
+        self._acknowledged = list(self._store.acknowledged_collisions())
         self._installations: list[tuple[SteamInstallation, list[SteamAccount]]] = []
         self._selected_installation: SteamInstallation | None = None
         self._selected_account: SteamAccount | None = None
@@ -649,8 +649,10 @@ class MainWindow(QMainWindow):
         app = self._model.row_at(source.row()).app
         if app.unsupported_code != UnsupportedCode.DESKTOP_ID_COLLISION:
             return
-        self._store.acknowledge_collision(app.desktop_id)
-        self._acknowledged.add(app.desktop_id)
+        self._store.acknowledge_collision(
+            app.desktop_id, app.desktop_path, app.collision_paths
+        )
+        self._acknowledged = list(self._store.acknowledged_collisions())
         self._start_scan()
 
     def _update_selection_count(self) -> None:

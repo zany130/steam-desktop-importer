@@ -85,7 +85,8 @@ preselects but refuses to decide.
 Phase 5 adds a SQLite store at `$XDG_STATE_HOME/steam-desktop-importer/`
 and importer-owned AppID allocation. On this host an empty store classifies
 all 804 resolved entries as New. The live `shortcuts.vdf` now has 961
-identities (Phase 0 recorded 783); none of those AppIDs collide with a
+identities (Phase 0 recorded 783; the added shortcuts were created with
+Steam ROM Manager, not by this importer); none of those AppIDs collide with a
 first-import candidate, and none pair name+exe with a desktop entry, so
 Possible Existing Match is 0. `Imported` means managed in importer state,
 not verified in the VDF.
@@ -136,7 +137,9 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
 - The desktop ID scheme is not injective, so two files in one root can derive
   the same ID. Discovery breaks the tie deterministically to keep exactly one
   entry per ID, then withholds import consent until the collision is
-  acknowledged, so persistent state is never keyed to an ambiguous ID.
+  acknowledged for that physical winner and colliding set, so persistent
+  state is never keyed to an ambiguous ID. A later scan that resolves a
+  different winner or a different colliding set requires confirmation again.
 - `Hidden=true` masks lower-priority copies; `NoDisplay=true` does not.
 - `env VAR=value` wrappers are preserved verbatim in argv.
 - `StartDir` comes from `Path=` or stays empty; it is never inferred from the

@@ -10,9 +10,15 @@ on a separate ``QObject`` because ``QRunnable`` is not one.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
-from ..desktop.discovery import DiscoveryResult, discover_applications
+from ..desktop.discovery import (
+    CollisionAcknowledgement,
+    DiscoveryResult,
+    discover_applications,
+)
 from ..models import SteamAccount, SteamInstallation
 from ..steam import discover_accounts, discover_installations
 from ..steam.running import SteamRunningStatus, detect_steam_running
@@ -33,11 +39,14 @@ class _ScanSignals(QObject):
 class ScanWorker(QRunnable):
     """Run desktop discovery off the GUI thread."""
 
-    def __init__(self, acknowledged_collisions: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        acknowledged_collisions: Iterable[CollisionAcknowledgement] | None = None,
+    ) -> None:
         super().__init__()
         self.signals = _ScanSignals()
         self.setAutoDelete(True)
-        self._acknowledged = acknowledged_collisions or set()
+        self._acknowledged = tuple(acknowledged_collisions or ())
 
     @Slot()
     def run(self) -> None:

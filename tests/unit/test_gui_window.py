@@ -226,7 +226,14 @@ def test_acknowledge_persists_then_rescans(qapp, monkeypatch):
     window.table.setCurrentIndex(index)
     assert window.table.currentIndex().isValid()
     window._acknowledge_collision()
-    assert "vendor-app.desktop" in store.acknowledged_collisions()
+    acks = store.acknowledged_collisions()
+    assert len(acks) == 1
+    assert acks[0].desktop_id == "vendor-app.desktop"
+    assert acks[0].matches(
+        "vendor-app.desktop",
+        Path("/tmp/vendor-app.desktop"),
+        [Path("/tmp/a.desktop"), Path("/tmp/b.desktop")],
+    )
     assert scanned == [True]
     window.close()
 

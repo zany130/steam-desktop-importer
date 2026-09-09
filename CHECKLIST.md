@@ -254,7 +254,8 @@ Scanning does **not** create mappings.
 - [x] Name / Exec changes keep the persisted AppID
 - [x] Install and account mappings stay separate
 - [x] Remembered installation and per-install account
-- [x] Remembered desktop-ID collision acknowledgements
+- [x] Remembered collision acknowledgements bound to the physical winner and
+      colliding-path fingerprint (still global, not per Steam account)
 - [x] New / Imported / Changed / Possible Existing Match
 - [x] Read-only listing of existing `shortcuts.vdf` identities
 - [x] `debug identity <desktop_id>`
@@ -273,7 +274,7 @@ size were unchanged.
 | Desktop-ID collisions | 1 |
 | Steam install | 1 native (`/var/home/zany130/.local/share/Steam`) |
 | Steam account | `120415481` / `zany130` |
-| Existing shortcut identities | **961** (Phase 0 recorded 783; the live file has grown) |
+| Existing shortcut identities | **961** (Phase 0 recorded 783; added later via Steam ROM Manager) |
 | Unique occupied AppIDs | 961, all high-bit |
 | Statuses on an empty store | 804 New, 0 Imported/Changed, 0 Possible Existing Match |
 | First-import candidates vs occupied | 777 free, **0 collisions** |
@@ -578,8 +579,8 @@ All nine points are in place:
   paths on the resolved entry.
 - `UnsupportedCode.DESKTOP_ID_COLLISION` withholds import consent. It is the
   only *liftable* unsupported code.
-- `discover_applications(acknowledged_collisions=...)` lifts the block while
-  keeping the diagnostic.
+- `discover_applications(acknowledged_collisions=...)` lifts the block only
+  when the acknowledgement still names this winner and colliding set.
 
 Behaviours worth noting, each covered by a test:
 
@@ -589,8 +590,12 @@ Behaviours worth noting, each covered by a test:
   existing "unparsable files do not claim an ID" rule survives collisions.
 - An entry that is **already unsupported** keeps its original reason, since
   that is more useful than the collision; `collision_paths` stays populated.
-- Acknowledgement is persisted in the Phase 5 store, keyed by desktop ID
-  only — a host-filesystem property, not a per-Steam-account one.
+- Acknowledgement is persisted in the Phase 5 store and remains global (a
+  host-filesystem property, not a per-Steam-account one). The row stores the
+  winning source path, the colliding path set, and a fingerprint of both.
+  If a later scan resolves a different winner or a different colliding set,
+  the acknowledgement does not apply and import consent is required again.
+  Desktop-ID-only rows from the first Phase 5 schema are discarded on open.
 
 Verified against the capture host: the real
 `ons-dev.vencord.Vesktop.desktop` collision is detected, blocks import

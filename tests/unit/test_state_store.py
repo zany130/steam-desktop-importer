@@ -90,22 +90,43 @@ def test_remembered_installation_and_per_install_account():
         assert store.remembered_installation() == "flatpak:/b"
 
 
-def test_collision_acknowledgements_are_global_to_the_desktop_id():
+def test_collision_acknowledgements_are_bound_to_the_physical_winner(tmp_path):
+    winner = tmp_path / "vendor-app.desktop"
+    other = tmp_path / "vendor" / "app.desktop"
+    winner.write_text("x")
+    other.parent.mkdir()
+    other.write_text("y")
     with StateStore(":memory:") as store:
-        assert store.acknowledged_collisions() == frozenset()
-        store.acknowledge_collision("vendor-app.desktop")
-        store.acknowledge_collision("vendor-app.desktop")
-        assert store.acknowledged_collisions() == frozenset({"vendor-app.desktop"})
+        assert store.acknowledged_collisions() == ()
+        first = store.acknowledge_collision("vendor-app.desktop", winner, (winner, other))
+        store.acknowledge_collision("vendor-app.desktop", winner, (winner, other))
+        acks = store.acknowledged_collisions()
+        assert len(acks) == 1
+        assert acks[0].desktop_id == "vendor-app.desktop"
+        assert acks[0].matches("vendor-app.desktop", winner, (winner, other))
+        assert acks[0].fingerprint == first.fingerprint
+        assert not acks[0].matches("vendor-app.desktop", other, (winner, other))
 
 
 def test_file_backed_store_round_trips(tmp_path):
     path = tmp_path / "state.sqlite3"
     with StateStore(path) as store:
         store.save_mapping("native:/a", 1, "app.desktop", 0x80000001, "A", "/bin/a", None)
-        store.acknowledge_collision("app.desktop")
+        store.acknowledge_collision(
+            "app.desktop",
+            tmp_path / "app.desktop",
+            [tmp_path / "app.desktop", tmp_path / "nested" / "app.desktop"],
+        )
     with StateStore(path) as store:
         assert store.get_mapping("native:/a", 1, "app.desktop").last_known_name == "A"
-        assert "app.desktop" in store.acknowledged_collisions()
+        acks = store.acknowledged_collisions()
+        assert len(acks) == 1
+        assert acks[0].desktop_id == "app.desktop"
+        assert acks[0].matches(
+            "app.desktop",
+            tmp_path / "app.desktop",
+            [tmp_path / "app.desktop", tmp_path / "nested" / "app.desktop"],
+        )
 
 
 def test_create_false_does_not_create_a_missing_file(tmp_path):
@@ -114,3 +135,34 @@ def test_create_false_does_not_create_a_missing_file(tmp_path):
         assert store.get_mapping("native:/a", 1, "app.desktop") is None
     assert not path.exists()
     assert not path.parent.exists()
+
+
+def test_desktop_id_only_acknowledgement_rows_are_discarded(tmp_path):
+    """Phase 5 rows that named only a desktop ID must not remain valid."""
+    import sqlite3
+
+    path = tmp_path / "state.sqlite3"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """
+        CREATE TABLE acknowledged_collisions (
+            desktop_id TEXT PRIMARY KEY,
+            acknowledged_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO acknowledged_collisions VALUES ('vendor-app.desktop', '2026-01-01T00:00:00+00:00')"
+    )
+    connection.commit()
+    connection.close()
+
+    with StateStore(path) as store:
+        assert store.acknowledged_collisions() == ()
+        store.acknowledge_collision(
+            "vendor-app.desktop",
+            tmp_path / "vendor-app.desktop",
+            [tmp_path / "vendor-app.desktop", tmp_path / "vendor" / "app.desktop"],
+        )
+    with StateStore(path) as store:
+        assert store.acknowledged_collisions()[0].desktop_id == "vendor-app.desktop"

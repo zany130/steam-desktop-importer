@@ -15,11 +15,15 @@ only when they mean to. Phase 7 will insert after a successful VDF write.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+
+from ..desktop.discovery import CollisionAcknowledgement, normalize_collision_path
 
 __all__ = [
     "ManagedMapping",
@@ -59,9 +63,16 @@ CREATE TABLE IF NOT EXISTS remembered_accounts (
 
 CREATE TABLE IF NOT EXISTS acknowledged_collisions (
     desktop_id TEXT PRIMARY KEY,
+    winner_path TEXT NOT NULL,
+    colliding_paths TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
     acknowledged_at TEXT NOT NULL
 );
 """
+
+_ACK_REQUIRED_COLUMNS = frozenset(
+    {"desktop_id", "winner_path", "colliding_paths", "fingerprint", "acknowledged_at"}
+)
 
 
 def xdg_state_home(environ: dict[str, str] | None = None, home: Path | None = None) -> Path:
@@ -101,6 +112,16 @@ class ManagedMapping:
     desktop_path: str | None
     created_at: str
     updated_at: str
+
+
+def _row_to_acknowledgement(row: sqlite3.Row) -> CollisionAcknowledgement:
+    stored = json.loads(row["colliding_paths"])
+    paths = tuple(Path(item) for item in stored)
+    return CollisionAcknowledgement(
+        desktop_id=row["desktop_id"],
+        winner_path=Path(row["winner_path"]),
+        colliding_paths=paths,
+    )
 
 
 def _row_to_mapping(row: sqlite3.Row) -> ManagedMapping:
@@ -144,7 +165,23 @@ class StateStore:
         self._connection.row_factory = sqlite3.Row
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.executescript(_SCHEMA)
+        self._discard_unbound_acknowledgements()
         self._connection.commit()
+
+    def _discard_unbound_acknowledgements(self) -> None:
+        """Drop desktop-ID-only acknowledgement rows from the Phase 5 schema.
+
+        Those rows cannot name a physical winner, so they must not survive
+        into a store that treats acknowledgement as consent to import.
+        """
+        columns = {
+            row[1]
+            for row in self._connection.execute("PRAGMA table_info(acknowledged_collisions)")
+        }
+        if not columns or _ACK_REQUIRED_COLUMNS <= columns:
+            return
+        self._connection.execute("DROP TABLE acknowledged_collisions")
+        self._connection.executescript(_SCHEMA)
 
     def close(self) -> None:
         self._connection.close()
@@ -302,24 +339,57 @@ class StateStore:
 
     # -- collision acknowledgements -------------------------------------
 
-    def acknowledge_collision(self, desktop_id: str) -> None:
-        """Remember a desktop-ID collision acknowledgement.
+    def acknowledge_collision(
+        self,
+        desktop_id: str,
+        winner_path: Path | str,
+        colliding_paths: Iterable[Path | str],
+    ) -> CollisionAcknowledgement:
+        """Remember a collision acknowledgement bound to a physical winner.
 
-        Scoped to the desktop ID, not to an installation or account: the
-        collision is a property of the host filesystem. Import identity
-        remains ``(installation, account, desktop_id)``.
+        Still global (not per Steam account): the collision is a property of
+        the host filesystem. The row is only reused when a later scan has the
+        same winner and the same colliding set. Import identity remains
+        ``(installation, account, desktop_id)``.
         """
+        ack = CollisionAcknowledgement(
+            desktop_id=desktop_id,
+            winner_path=Path(winner_path),
+            colliding_paths=tuple(Path(path) for path in colliding_paths),
+        )
+        if not ack.colliding_paths:
+            raise ValueError("cannot acknowledge a collision without source paths")
+        paths_json = json.dumps(
+            sorted({normalize_collision_path(path) for path in ack.colliding_paths})
+        )
         self._connection.execute(
             """
-            INSERT INTO acknowledged_collisions (desktop_id, acknowledged_at)
-            VALUES (?, ?)
+            INSERT INTO acknowledged_collisions (
+                desktop_id, winner_path, colliding_paths, fingerprint, acknowledged_at
+            ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT (desktop_id) DO UPDATE SET
+                winner_path = excluded.winner_path,
+                colliding_paths = excluded.colliding_paths,
+                fingerprint = excluded.fingerprint,
                 acknowledged_at = excluded.acknowledged_at
             """,
-            (desktop_id, _now()),
+            (
+                ack.desktop_id,
+                normalize_collision_path(ack.winner_path),
+                paths_json,
+                ack.fingerprint,
+                _now(),
+            ),
         )
         self._connection.commit()
+        return ack
 
-    def acknowledged_collisions(self) -> frozenset[str]:
-        rows = self._connection.execute("SELECT desktop_id FROM acknowledged_collisions").fetchall()
-        return frozenset(str(row["desktop_id"]) for row in rows)
+    def acknowledged_collisions(self) -> tuple[CollisionAcknowledgement, ...]:
+        rows = self._connection.execute(
+            """
+            SELECT desktop_id, winner_path, colliding_paths
+            FROM acknowledged_collisions
+            ORDER BY desktop_id
+            """
+        ).fetchall()
+        return tuple(_row_to_acknowledgement(row) for row in rows)

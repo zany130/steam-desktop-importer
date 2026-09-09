@@ -17,6 +17,7 @@ IMPLEMENTATION.md §7. Three separate concerns, kept separate here:
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -29,10 +30,13 @@ __all__ = [
     "DEFAULT_XDG_DATA_DIRS",
     "SUPPLEMENTAL_APPLICATION_DIRS",
     "ApplicationRoot",
+    "CollisionAcknowledgement",
     "DesktopIdCollision",
     "DiscoveryResult",
+    "collision_fingerprint",
     "desktop_id_for",
     "discover_applications",
+    "normalize_collision_path",
     "ordered_application_roots",
     "xdg_data_dirs",
     "xdg_data_home",
@@ -78,6 +82,55 @@ class DesktopIdCollision:
 
     winner: Path | None
     """The file that claimed or masked the ID. ``None`` if all were unparsable."""
+
+
+def normalize_collision_path(path: Path | str) -> str:
+    """Absolute, symlink-resolved path used as the physical collision identity."""
+    candidate = Path(path)
+    try:
+        return str(candidate.resolve())
+    except OSError:
+        return str(candidate.absolute())
+
+
+def collision_fingerprint(winner: Path | str, paths: Iterable[Path | str]) -> str:
+    """Fingerprint of a same-root collision: physical winner plus colliding set.
+
+    A later scan with a different winner or a different path set produces a
+    different value, so a stored acknowledgement cannot follow a new launcher.
+    """
+    winner_key = normalize_collision_path(winner)
+    path_keys = sorted({normalize_collision_path(path) for path in paths})
+    blob = f"{winner_key}\0" + "\0".join(path_keys)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class CollisionAcknowledgement:
+    """A collision consent bound to a physical winner and colliding set.
+
+    Global to the host filesystem, not to a Steam account. It is valid only
+    while the current scan still resolves the same desktop ID to the same
+    winner among the same colliding paths.
+    """
+
+    desktop_id: str
+    winner_path: Path
+    colliding_paths: tuple[Path, ...]
+
+    @property
+    def fingerprint(self) -> str:
+        return collision_fingerprint(self.winner_path, self.colliding_paths)
+
+    def matches(
+        self,
+        desktop_id: str,
+        winner: Path | str | None,
+        paths: Iterable[Path | str],
+    ) -> bool:
+        if winner is None or desktop_id != self.desktop_id:
+            return False
+        return collision_fingerprint(winner, paths) == self.fingerprint
 
 
 @dataclass
@@ -247,7 +300,7 @@ def _group_by_desktop_id(root: Path) -> dict[str, list[Path]]:
 def _withhold_import_consent(
     app: DesktopApplication,
     paths: list[Path],
-    acknowledged: frozenset[str],
+    acknowledged: tuple[CollisionAcknowledgement, ...],
 ) -> None:
     """Record a collision on ``app`` and, unless acknowledged, block import.
 
@@ -256,13 +309,19 @@ def _withhold_import_consent(
     withholds is *consent to import*, because a §6 state row keyed on the
     desktop ID alone could not tell the colliding files apart later.
 
+    An acknowledgement is valid only when it names this winner and this
+    colliding set. A stale row keyed only by desktop ID cannot lift the
+    block, and neither can one whose winner or path set has changed.
+
     An entry that is already unsupported keeps its original reason: it cannot
     be imported regardless, and the parse-level problem is the more useful
     thing to show. The collision stays visible via ``collision_paths``.
     """
     app.collision_paths = list(paths)
 
-    if app.desktop_id in acknowledged or not app.supported_for_import:
+    if not app.supported_for_import:
+        return
+    if any(ack.matches(app.desktop_id, app.desktop_path, paths) for ack in acknowledged):
         return
 
     others = ", ".join(str(path) for path in paths if path != app.desktop_path)
@@ -280,7 +339,7 @@ def discover_applications(
     home: Path | None = None,
     locale: str | None = None,
     include_supplemental: bool = True,
-    acknowledged_collisions: Iterable[str] | None = None,
+    acknowledged_collisions: Iterable[CollisionAcknowledgement] | None = None,
 ) -> DiscoveryResult:
     """Scan the ordered roots and resolve desktop IDs.
 
@@ -300,15 +359,16 @@ def discover_applications(
     Precedence handles collisions *between* roots. Files colliding within one
     root have no precedence to separate them, so the lexically first path wins
     the ID, the rest are shadowed, a :class:`DesktopIdCollision` is recorded,
-    and the winner is held back from import. Listing an ID in
-    ``acknowledged_collisions`` lifts that hold while keeping the diagnostic.
+    and the winner is held back from import. An acknowledgement that still
+    matches the current winner and colliding set lifts that hold while
+    keeping the diagnostic.
     """
     if roots is None:
         roots = ordered_application_roots(
             environ=environ, home=home, include_supplemental=include_supplemental
         )
 
-    acknowledged = frozenset(acknowledged_collisions or ())
+    acknowledged = tuple(acknowledged_collisions or ())
     result = DiscoveryResult(roots=list(roots))
 
     for root in roots:
