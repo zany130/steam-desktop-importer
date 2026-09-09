@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Apostrophe Not Quoting
+Comment=Two apostrophes that happen to BALANCE. A naive shell parser would read
+Comment[x-note]="'s a b'" as a quoted region and silently produce "its a bs".
+Comment[x-note2]=Neither opening quote sits at an argument boundary, so the
+Comment[x-note3]=compatibility pattern must NOT be recognised here and the strict
+Comment[x-note4]=grammar, which is correct for apostrophes, must be kept.
+Exec=/usr/bin/apostrophe --msg it's a b's
+Icon=apostrophe
+Terminal=false

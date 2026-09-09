@@ -27,14 +27,23 @@ from dataclasses import dataclass, field
 
 __all__ = [
     "EXEC_RESERVED_CHARACTERS",
+    "PARSE_MODE_COMPAT",
+    "PARSE_MODE_STRICT",
     "ExecParseError",
     "ExecParseResult",
     "FieldCodeContext",
+    "looks_like_shell_single_quoting",
     "parse_exec",
     "tokenize_exec",
     "unescape_entry_value",
     "uses_env_wrapper",
 ]
+
+PARSE_MODE_STRICT = "strict"
+"""The Desktop Entry grammar: ``'`` is a reserved but ordinary character."""
+
+PARSE_MODE_COMPAT = "compat"
+"""Strict grammar plus POSIX-shell single-quote handling. Opt-in per entry."""
 
 
 class ExecParseError(ValueError):
@@ -107,6 +116,14 @@ class ExecParseResult:
 
     warnings: tuple[str, ...]
 
+    parse_mode: str = PARSE_MODE_STRICT
+    """Which tokenizer produced ``tokens``. See :func:`parse_exec`."""
+
+    @property
+    def nonstandard(self) -> bool:
+        """Whether the value needed non-specification handling to tokenize."""
+        return self.parse_mode != PARSE_MODE_STRICT
+
     @property
     def program(self) -> str | None:
         """First element of ``argv``, if any."""
@@ -151,11 +168,19 @@ def unescape_entry_value(raw: str) -> str:
     return "".join(out)
 
 
-def _tokenize(value: str) -> tuple[list[str], list[bool], list[str]]:
+def _tokenize(
+    value: str, honour_single_quotes: bool = False
+) -> tuple[list[str], list[bool], list[str]]:
     """Apply the Exec quoting rule.
 
     Returns the tokens, a parallel list recording whether each token contained
     any quoted section, and any warnings.
+
+    With ``honour_single_quotes`` the *only* change is that ``'`` opens a
+    literal-quoted region, as POSIX shells and GLib treat it. Everything else,
+    including the double-quote escape rules, stays exactly as the Desktop
+    Entry specification defines it. Keeping the deviation this narrow means a
+    compatibility parse differs from a strict parse in one respect only.
     """
     tokens: list[str] = []
     quoted_flags: list[bool] = []
@@ -208,6 +233,23 @@ def _tokenize(value: str) -> tuple[list[str], list[bool], list[str]]:
                 raise ExecParseError(f"unterminated double quote in Exec value: {value!r}")
             continue
 
+        if char == "'" and honour_single_quotes:
+            started = True
+            current_quoted = True
+            index += 1
+            closed = False
+            while index < length:
+                if value[index] == "'":
+                    closed = True
+                    index += 1
+                    break
+                # Nothing is escapable inside a POSIX single-quoted region.
+                current.append(value[index])
+                index += 1
+            if not closed:
+                raise ExecParseError(f"unterminated single quote in Exec value: {value!r}")
+            continue
+
         if char == "'" and not seen_single_quote:
             seen_single_quote = True
             warnings.append(
@@ -226,10 +268,68 @@ def _tokenize(value: str) -> tuple[list[str], list[bool], list[str]]:
     return tokens, quoted_flags, warnings
 
 
-def tokenize_exec(raw: str) -> list[str]:
+def tokenize_exec(raw: str, honour_single_quotes: bool = False) -> list[str]:
     """Unescape and tokenize an ``Exec=`` value without expanding field codes."""
-    tokens, _, _ = _tokenize(unescape_entry_value(raw))
+    tokens, _, _ = _tokenize(unescape_entry_value(raw), honour_single_quotes)
     return tokens
+
+
+def looks_like_shell_single_quoting(value: str) -> bool:
+    """Whether ``value`` uses ``'`` in a recognisable shell-quoting pattern.
+
+    This is the gate on compatibility parsing. It has to separate two very
+    different uses of the same character:
+
+    * quoting, as in ``-b 'EMU Stuff'``, which the strict grammar mangles;
+    * an apostrophe, as in ``don't``, where the strict grammar is correct and
+      a shell parser would be wrong.
+
+    The pattern is only recognised when *every* single quote outside a
+    double-quoted region participates in a well-formed pair, each opening
+    quote sits at an argument boundary (start of value, whitespace, or after
+    ``=``), and each closing quote is followed by whitespace or ends the
+    value. ``don't`` fails on the opening-quote position, and ``it's a b's``
+    fails for the same reason even though its quotes happen to balance.
+
+    Single quotes appearing *inside* a double-quoted region are literal in
+    both grammars and are skipped entirely, so ``bash -c "'/path/x.sh'"``
+    is correctly left to the strict parser.
+
+    ``value`` must already have had its string-value escapes resolved.
+    """
+    positions: list[int] = []
+    index = 0
+    length = len(value)
+    in_double = False
+
+    while index < length:
+        char = value[index]
+        if in_double:
+            if char == "\\" and index + 1 < length and value[index + 1] in _QUOTE_ESCAPABLE:
+                index += 2
+                continue
+            if char == '"':
+                in_double = False
+            index += 1
+            continue
+        if char == '"':
+            in_double = True
+            index += 1
+            continue
+        if char == "'":
+            positions.append(index)
+        index += 1
+
+    if in_double or not positions or len(positions) % 2:
+        return False
+
+    boundary_before = set(_ARGUMENT_SEPARATORS) | {"="}
+    for opening, closing in zip(positions[0::2], positions[1::2]):
+        if opening > 0 and value[opening - 1] not in boundary_before:
+            return False
+        if closing + 1 < length and value[closing + 1] not in _ARGUMENT_SEPARATORS:
+            return False
+    return True
 
 
 def _expand_token(
@@ -365,20 +465,57 @@ def _expand_token(
     return [text]
 
 
-def parse_exec(raw: str, context: FieldCodeContext | None = None) -> ExecParseResult:
+def parse_exec(
+    raw: str,
+    context: FieldCodeContext | None = None,
+    allow_compatibility: bool = True,
+) -> ExecParseResult:
     """Parse an ``Exec=`` value into a structured argument vector.
+
+    The strict Desktop Entry grammar is always tried first. Compatibility
+    parsing is never applied globally: it is only reached when the strict
+    result would demonstrably be wrong, which requires all three of
+
+    1. :func:`looks_like_shell_single_quoting` recognising the pattern,
+    2. the compatibility tokenizer succeeding, and
+    3. its tokens actually differing from the strict tokens.
+
+    When that happens the result carries ``parse_mode == PARSE_MODE_COMPAT``
+    and ``nonstandard is True``, so callers can surface it rather than
+    silently accepting a non-specification entry.
 
     Args:
         raw: The ``Exec`` value exactly as read from the desktop file.
         context: Substitutions available to field codes. Defaults to an empty
             context, i.e. no icon, no name, no desktop-file location, and no
             documents or URLs, which is the normal Steam-shortcut case.
+        allow_compatibility: Set ``False`` to force strict-only parsing.
 
     Raises:
-        ExecParseError: If the value cannot be tokenized.
+        ExecParseError: If the value cannot be tokenized under the strict
+            grammar.
     """
     ctx = context or FieldCodeContext()
-    tokens, quoted_flags, tokenize_warnings = _tokenize(unescape_entry_value(raw))
+    unescaped = unescape_entry_value(raw)
+
+    tokens, quoted_flags, tokenize_warnings = _tokenize(unescaped)
+    parse_mode = PARSE_MODE_STRICT
+
+    if allow_compatibility and looks_like_shell_single_quoting(unescaped):
+        try:
+            compat = _tokenize(unescaped, honour_single_quotes=True)
+        except ExecParseError:
+            compat = None
+        if compat is not None and compat[0] != tokens:
+            tokens, quoted_flags, tokenize_warnings = compat
+            parse_mode = PARSE_MODE_COMPAT
+            tokenize_warnings = list(tokenize_warnings)
+            tokenize_warnings.append(
+                "Exec uses POSIX shell single-quote quoting, which the Desktop "
+                "Entry specification reserves; the strict grammar would split "
+                "these arguments incorrectly, so a compatibility tokenizer was "
+                "used and the entry is marked nonstandard"
+            )
 
     report = _Report(warnings=list(tokenize_warnings))
     argv: list[str] = []
@@ -402,6 +539,7 @@ def parse_exec(raw: str, context: FieldCodeContext | None = None) -> ExecParseRe
         deprecated_field_codes=tuple(report.deprecated),
         dropped_tokens=tuple(report.dropped),
         warnings=tuple(report.warnings),
+        parse_mode=parse_mode,
     )
 
 

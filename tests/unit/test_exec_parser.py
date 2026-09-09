@@ -5,8 +5,11 @@ from __future__ import annotations
 import pytest
 
 from steam_desktop_importer.desktop.exec_parser import (
+    PARSE_MODE_COMPAT,
+    PARSE_MODE_STRICT,
     ExecParseError,
     FieldCodeContext,
+    looks_like_shell_single_quoting,
     parse_exec,
     tokenize_exec,
     unescape_entry_value,
@@ -76,7 +79,137 @@ def test_unterminated_quote_is_an_error():
 def test_single_quote_is_literal_and_warned():
     result = parse_exec("/usr/bin/app it's")
     assert result.argv == ("/usr/bin/app", "it's")
+    assert result.parse_mode == PARSE_MODE_STRICT
     assert any("single quote" in warning for warning in result.warnings)
+
+
+# ----------------------------------------------------------------------
+# Strict-first parsing with per-entry compatibility fallback
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "recognised"),
+    [
+        # Recognised: every quote pairs up at an argument boundary.
+        ("/usr/bin/app -b 'EMU Stuff'", True),
+        ("/usr/bin/app 'a b' 'c d'", True),
+        ("/usr/bin/app --opt='a b'", True),
+        ("'/opt/My App/run' --flag", True),
+        ("sh -c 'do a thing' sh", True),
+        # Not recognised: apostrophes, not quoting.
+        ("/usr/bin/app don't", False),
+        ("/usr/bin/app it's a b's", False),
+        ("/usr/bin/app o'brien o'neill", False),
+        # Not recognised: unbalanced.
+        ("/usr/bin/app 'a b", False),
+        # Not recognised: quotes live inside a double-quoted region.
+        ("""bash -c "'/path/to/x.sh'" """, False),
+        ('/usr/bin/app "it\'s fine"', False),
+        # Not recognised: no single quotes at all.
+        ("/usr/bin/app --flag", False),
+    ],
+)
+def test_shell_quoting_pattern_detection(value, recognised):
+    assert looks_like_shell_single_quoting(value) is recognised
+
+
+def test_compat_retry_fixes_a_real_bottles_launcher(exec_grammar_dir):
+    result = argv_of(exec_grammar_dir, "exec-single-quote-shell-style.desktop")
+    assert result.parse_mode == PARSE_MODE_COMPAT
+    assert result.nonstandard is True
+    assert result.argv == (
+        "flatpak",
+        "run",
+        "--command=bottles-cli",
+        "com.usebottles.bottles",
+        "run",
+        "-p",
+        "EzRO",
+        "-b",
+        "EMU Stuff",
+        "--",
+    )
+    assert any("marked nonstandard" in warning for warning in result.warnings)
+
+
+def test_compat_retry_keeps_a_shell_script_as_one_argument(exec_grammar_dir):
+    """Double quotes inside the single-quoted region stay literal."""
+    result = argv_of(exec_grammar_dir, "exec-single-quote-shell-script.desktop")
+    assert result.parse_mode == PARSE_MODE_COMPAT
+    assert result.argv == (
+        "sh",
+        "-c",
+        'XAPP_FORCE_GTKWINDOW_ICON="/home/example/logo.png" /usr/bin/browser '
+        '--class WebApp --no-remote "https://example.invalid"',
+    )
+
+
+def test_apostrophes_stay_strict_even_when_they_balance(exec_grammar_dir):
+    """A shell parser would silently turn "it's a b's" into "its a bs"."""
+    result = argv_of(exec_grammar_dir, "exec-single-quote-apostrophe.desktop")
+    assert result.parse_mode == PARSE_MODE_STRICT
+    assert result.nonstandard is False
+    assert result.argv == ("/usr/bin/apostrophe", "--msg", "it's", "a", "b's")
+
+
+def test_single_quotes_inside_double_quotes_stay_strict(exec_grammar_dir):
+    result = argv_of(exec_grammar_dir, "exec-single-quote-inside-double.desktop")
+    assert result.parse_mode == PARSE_MODE_STRICT
+    assert result.nonstandard is False
+    assert result.argv == (
+        "bash",
+        "-c",
+        "'/var/home/example/.local/share/winezgui/Prefixes/AltInstaller/AltServer.sh'",
+    )
+
+
+def test_posix_quote_escape_idiom_is_not_recognised(exec_grammar_dir):
+    r"""'...'\''...' needs a real shell parser, so it stays strict and warns."""
+    result = argv_of(exec_grammar_dir, "exec-single-quote-escape-idiom.desktop")
+    assert result.parse_mode == PARSE_MODE_STRICT
+    assert result.nonstandard is False
+    # The mangling is reported rather than passed off as a clean parse.
+    assert any("single quote" in warning for warning in result.warnings)
+    assert any("dropped token" in warning for warning in result.warnings)
+
+
+def test_nothing_is_escapable_inside_a_single_quoted_region():
+    result = parse_exec(r"/usr/bin/app 'a\\b \\$x'")
+    assert result.parse_mode == PARSE_MODE_COMPAT
+    assert result.argv == ("/usr/bin/app", "a\\b \\$x")
+
+
+def test_compatibility_can_be_disabled():
+    value = "/usr/bin/app -b 'EMU Stuff'"
+    assert parse_exec(value).parse_mode == PARSE_MODE_COMPAT
+    strict = parse_exec(value, allow_compatibility=False)
+    assert strict.parse_mode == PARSE_MODE_STRICT
+    assert strict.argv == ("/usr/bin/app", "-b", "'EMU", "Stuff'")
+
+
+def test_strict_is_the_default_for_ordinary_values(exec_grammar_dir):
+    """Compatibility parsing must not leak into entries that do not need it."""
+    for filename in (
+        "exec-quoting.desktop",
+        "exec-env-wrapper.desktop",
+        "exec-literal-backslash.desktop",
+        "exec-percent-U.desktop",
+    ):
+        result = argv_of(exec_grammar_dir, filename)
+        assert result.parse_mode == PARSE_MODE_STRICT, filename
+        assert result.nonstandard is False, filename
+
+
+def test_double_quote_grammar_is_unchanged_in_compat_mode():
+    """Only single-quote handling differs between the two tokenizers."""
+    value = r"""/usr/bin/app "C:\\path" 'a b'"""
+    assert tokenize_exec(value) == ["/usr/bin/app", "C:\\path", "'a", "b'"]
+    assert tokenize_exec(value, honour_single_quotes=True) == [
+        "/usr/bin/app",
+        "C:\\path",
+        "a b",
+    ]
 
 
 # ----------------------------------------------------------------------

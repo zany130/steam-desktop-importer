@@ -29,6 +29,7 @@ from pathlib import Path
 
 from ..models import DesktopApplication, UnsupportedCode
 from .exec_parser import (
+    PARSE_MODE_STRICT,
     ExecParseError,
     ExecParseResult,
     FieldCodeContext,
@@ -615,5 +616,9 @@ def build_application(
         entry_type=parsed.entry_type,
         source_root=source_root,
         field_codes=field_codes,
+        nonstandard_exec=bool(parsed.exec_result and parsed.exec_result.nonstandard),
+        exec_parse_mode=(
+            parsed.exec_result.parse_mode if parsed.exec_result else PARSE_MODE_STRICT
+        ),
         parse_warnings=list(parsed.warnings),
     )

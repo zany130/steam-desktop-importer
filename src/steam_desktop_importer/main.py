@@ -53,6 +53,9 @@ def _print_scan(args: argparse.Namespace) -> int:
     if args.importable_only:
         applications = [app for app in applications if app.supported_for_import]
 
+    if args.nonstandard_only:
+        applications = [app for app in applications if app.nonstandard_exec]
+
     for app in applications:
         print(f"{app.desktop_id}")
         print(f"    name        {app.localized_name or app.name}")
@@ -60,12 +63,17 @@ def _print_scan(args: argparse.Namespace) -> int:
         print(f"    status      {_status(app)}")
         if app.unsupported_reason:
             print(f"    reason      {app.unsupported_reason}")
+        if app.nonstandard_exec:
+            print(f"    exec mode   {app.exec_parse_mode} (nonstandard)")
         print(f"    argv        {app.exec_argv}")
+
+    nonstandard = sum(app.nonstandard_exec for app in result.applications.values())
 
     print()
     print(f"roots scanned      {len(result.roots)}")
     print(f"resolved           {len(result.applications)}")
     print(f"importable         {len(result.importable)}")
+    print(f"nonstandard Exec   {nonstandard}")
     print(f"masked by Hidden   {len(result.masked_ids)}")
     print(f"shadowed copies    {len(result.shadowed)}")
     print(f"parse errors       {len(result.errors)}")
@@ -82,17 +90,25 @@ def _print_desktop_entry(args: argparse.Namespace) -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
-    resolved = path.resolve()
+    # Match against both the literal and the fully resolved path. On systems
+    # where /home is a symlink, the two differ and only comparing one of them
+    # would wrongly report the file as being outside every root.
+    candidates = {path, path.resolve()}
     desktop_id = None
     source_root = None
     for root in ordered_application_roots():
-        try:
-            candidate_id = desktop_id_for(root.path, resolved)
-        except ValueError:
-            continue
-        desktop_id = candidate_id
-        source_root = root.path
-        break
+        for root_path in {root.path, root.path.resolve()}:
+            for candidate in candidates:
+                try:
+                    desktop_id = desktop_id_for(root_path, candidate)
+                except ValueError:
+                    continue
+                source_root = root.path
+                break
+            if desktop_id is not None:
+                break
+        if desktop_id is not None:
+            break
 
     if desktop_id is None:
         # §7.3 and rule 2 forbid keying by basename. Say so rather than
@@ -113,6 +129,9 @@ def _print_desktop_entry(args: argparse.Namespace) -> int:
     print(f"localized name      {app.localized_name}")
     print(f"raw Exec            {app.raw_exec}")
     print(f"parsed argv         {app.exec_argv}")
+    print(f"exec parse mode     {app.exec_parse_mode}")
+    if app.nonstandard_exec:
+        print("nonstandard exec    yes (strict grammar would mis-tokenize this value)")
     print(f"field codes         {app.field_codes or '(none)'}")
     if parsed.exec_result and parsed.exec_result.dropped_tokens:
         print(f"dropped tokens      {list(parsed.exec_result.dropped_tokens)}")
@@ -160,6 +179,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--no-supplemental", action="store_true")
     scan.add_argument("--all", action="store_true", help="include NoDisplay entries")
     scan.add_argument("--importable-only", action="store_true")
+    scan.add_argument(
+        "--nonstandard-only",
+        action="store_true",
+        help="only entries whose Exec needed the compatibility tokenizer",
+    )
     scan.set_defaults(func=_print_scan)
 
     entry = debug_commands.add_parser("desktop-entry", help="explain one desktop file")

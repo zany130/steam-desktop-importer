@@ -47,7 +47,21 @@ Expected totals: 6 resolved, 2 masked, 7 shadowed, 5 importable.
 | `exec-with-path` / `exec-no-path` | rule 6: `StartDir` comes from `Path=` or stays empty |
 | `exec-bare-command` | a bare command name is left unresolved by the parser |
 | `exec-missing` / `exec-empty` | no importable command |
-| `exec-single-quote-shell-style` | **real-world case.** Pins current behaviour for CHECKLIST.md OPEN-1 |
+
+### Single-quote handling (CHECKLIST.md DEV-8)
+
+The strict tokenizer runs first; a compatibility retry happens per entry only
+when a recognisable non-standard quoting pattern would otherwise be
+mis-tokenized. These four fixtures pin each class, and all four are taken from
+or modelled on entries observed on the capture host.
+
+| Fixture | Pattern | Expected |
+| --- | --- | --- |
+| `exec-single-quote-shell-style` | `-b 'EMU Stuff'` (Bottles) | **compat**, `nonstandard_exec=True` |
+| `exec-single-quote-shell-script` | `sh -c '<script with spaces and double quotes>'` | **compat**, whole script stays one argument |
+| `exec-single-quote-inside-double` | `bash -c "'/path/x.sh'"` (WineZGUI) | **strict** — both grammars agree, already correct |
+| `exec-single-quote-escape-idiom` | `-c '/bin/svc -o '\''%u'\'''` (Stremio) | **strict** — needs a real shell parser, reported via warnings |
+| `exec-single-quote-apostrophe` | `it's a b's` | **strict** — quotes balance, but a shell parser would corrupt this |
 
 ## `entry_semantics/applications/`
 

@@ -15,26 +15,26 @@ from steam_desktop_importer.desktop.parser import build_application, parse_deskt
 from ..conftest import DESKTOP_ENTRIES
 
 
-def test_open_1_single_quotes_are_literal_and_split_the_argument(exec_grammar_dir):
-    """OPEN-1: strict specification compliance breaks real-world entries.
+def test_resolved_open_1_nonstandard_exec_is_marked_on_the_application(exec_grammar_dir):
+    """OPEN-1 is resolved by DEV-8: strict first, per-entry compatibility retry.
 
-    The Desktop Entry specification reserves ``'`` and forbids its use, so a
-    compliant tokenizer treats it as an ordinary character. Real generated
-    launchers use it as shell-style quoting anyway. 33 of 804 entries on the
-    capture host are affected.
+    Kept here so the resolution stays visible next to the issues it came from.
+    The tokenizer behaviour itself is covered in ``test_exec_parser.py``.
     """
     parsed = parse_desktop_entry(exec_grammar_dir / "exec-single-quote-shell-style.desktop")
-    assert parsed.exec_result is not None
-    argv = parsed.exec_result.argv
+    app = build_application(parsed, desktop_id="exec-single-quote-shell-style.desktop")
 
-    # Current behaviour: 'EMU Stuff' becomes two arguments, which would launch
-    # the wrong thing.
-    assert "'EMU" in argv
-    assert "Stuff'" in argv
-    assert "EMU Stuff" not in argv
+    assert app.nonstandard_exec is True
+    assert app.exec_parse_mode == "compat"
+    assert "EMU Stuff" in app.exec_argv
 
-    # It is at least reported rather than silently accepted.
-    assert any("single quote" in warning for warning in parsed.exec_result.warnings)
+    # Ordinary entries are untouched: compatibility parsing is per entry.
+    ordinary = build_application(
+        parse_desktop_entry(exec_grammar_dir / "exec-quoting.desktop"),
+        desktop_id="exec-quoting.desktop",
+    )
+    assert ordinary.nonstandard_exec is False
+    assert ordinary.exec_parse_mode == "strict"
 
 
 def test_open_2_desktop_ids_can_collide_between_nested_and_dashed_paths():

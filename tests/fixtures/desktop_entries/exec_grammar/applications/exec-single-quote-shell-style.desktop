@@ -1,13 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=Shell Style Single Quotes
-Comment=Taken from a real generated launcher. The Desktop Entry specification
-Comment[x-note]=RESERVES the single quote and says it must not be used, so a strictly
-Comment[x-note2]=spec-compliant tokenizer treats it as a literal character and splits
-Comment[x-note3]='EMU Stuff' into two broken arguments. GLib's parser, which real
-Comment[x-note4]=desktop environments use, honours it as shell-style quoting instead.
-Comment[x-note5]=See CHECKLIST.md open issue OPEN-1. This fixture pins CURRENT
-Comment[x-note6]=behaviour so that any future change is deliberate and visible.
+Comment=Taken from a real Bottles launcher. The Desktop Entry specification
+Comment[x-note]=RESERVES the single quote, so the strict tokenizer treats it as a
+Comment[x-note2]=literal character and splits 'EMU Stuff' into two broken arguments.
+Comment[x-note3]=The pattern is recognisable, so parsing retries with the
+Comment[x-note4]=compatibility tokenizer and the entry is marked nonstandard_exec
+Comment[x-note5]=with exec_parse_mode="compat". See CHECKLIST.md DEV-8.
 Exec=flatpak run --command=bottles-cli com.usebottles.bottles run -p EzRO -b 'EMU Stuff' -- %u
 Icon=single-quote
 Terminal=false

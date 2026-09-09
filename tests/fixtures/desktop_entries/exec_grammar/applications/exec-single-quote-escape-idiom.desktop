@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Shell Quote Escape Idiom
+Comment=Taken from a real Stremio launcher. It uses the POSIX idiom for putting a
+Comment[x-note]=single quote inside a single-quoted string: close, backslash-quote,
+Comment[x-note2]=reopen. A quote preceded by a backslash is not at an argument
+Comment[x-note3]=boundary, so the compatibility pattern is deliberately NOT recognised.
+Comment[x-note4]=Handling it would need a real shell parser. Staying strict is the
+Comment[x-note5]=conservative choice, and the result is reported through warnings.
+Exec=/usr/bin/flatpak run --command=sh com.example.Service -c '/usr/bin/service -o '\\''%u'\\'''
+Icon=quote-escape-idiom
+Terminal=false

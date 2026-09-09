@@ -117,6 +117,20 @@ class DesktopApplication:
     field_codes: list[str] = field(default_factory=list)
     """Field codes seen in ``Exec=``. Required by the §33 debug output."""
 
+    nonstandard_exec: bool = False
+    """``Exec=`` did not tokenize correctly under the strict grammar.
+
+    Currently this means POSIX shell single-quote quoting, which the Desktop
+    Entry specification reserves. See ``exec_parse_mode``.
+    """
+
+    exec_parse_mode: str = "strict"
+    """Which tokenizer produced ``exec_argv``: ``strict`` or ``compat``.
+
+    Compatibility parsing is applied per entry, only after the strict parse is
+    shown to be wrong. It is never enabled globally.
+    """
+
     parse_warnings: list[str] = field(default_factory=list)
     """Non-fatal problems found while parsing. Surfaced, never swallowed."""
 

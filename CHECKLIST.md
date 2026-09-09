@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phase 0 and Phase 1 complete. 156 tests passing.**
+**Current state: Phase 0 and Phase 1 complete. 177 tests passing.**
 No code in this repository writes to any Steam directory, and a test enforces
 that (`test_package_performs_no_filesystem_writes`).
 
@@ -82,6 +82,9 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] **Not** a blanket regex deletion
 - [x] `env VAR=value` preserved verbatim in argv (rule 5)
 - [x] No shell features introduced
+- [x] Strict grammar first; per-entry compatibility retry only for recognised
+      non-standard single-quote patterns, marked `nonstandard_exec` /
+      `exec_parse_mode="compat"` (DEV-8)
 
 ### §33 Debug commands (partial)
 
@@ -171,6 +174,59 @@ When an entry is both `Terminal=true` and has an unresolvable `TryExec`, the
 terminal reason wins. Installing the binary would not make it importable,
 whereas the reverse is not true. §8 does not specify an order.
 
+### DEV-8 — Strict-first parsing with a per-entry compatibility retry
+
+Resolves OPEN-1.
+
+The Desktop Entry specification reserves `'` and forbids its use, so a
+compliant tokenizer treats it as an ordinary character. Real generated
+launchers use it as POSIX shell quoting anyway — 32 of 804 entries on the
+capture host. Bottles, for example, writes:
+
+```text
+Exec=flatpak run --command=bottles-cli com.usebottles.bottles run -p EzRO -b 'EMU Stuff' -- %u
+```
+
+Strict parsing turns `'EMU Stuff'` into `"'EMU"` and `"Stuff'"`, which would
+launch the wrong thing.
+
+**The strict FreeDesktop tokenizer always runs first.** Compatibility parsing
+is never enabled globally. It is reached only when all three of the following
+hold, at which point the strict result is demonstrably wrong:
+
+1. `looks_like_shell_single_quoting()` recognises the pattern;
+2. the compatibility tokenizer succeeds;
+3. its tokens actually differ from the strict tokens.
+
+The entry is then marked `nonstandard_exec=True` and
+`exec_parse_mode="compat"` on `DesktopApplication`, a warning is recorded, and
+`debug scan --nonstandard-only` lists exactly these entries.
+
+The compatibility tokenizer is the strict tokenizer plus one change: `'` opens
+a literal-quoted region. The double-quote rules, escape handling and field-code
+logic are identical, so a compat parse differs from a strict parse in exactly
+one respect.
+
+Pattern recognition is deliberately conservative. It requires every single
+quote outside a double-quoted region to pair up, each opening quote to sit at
+an argument boundary (start, whitespace, or after `=`), and each closing quote
+to be followed by whitespace or end the value. Measured against real data,
+this correctly separates three classes:
+
+| Class | Example | Outcome |
+| --- | --- | --- |
+| Shell quoting | `-b 'EMU Stuff'` | 32 entries → **compat**, argv fixed |
+| Quotes inside double quotes | `bash -c "'/path/x.sh'"` | 17 entries → **strict**, already correct |
+| `'\''` escape idiom | `-c '/bin/svc -o '\''%u'\'''` | 1 entry → **strict**, needs a real shell parser; reported via warnings |
+| Apostrophes | `don't`, `it's a b's` | → **strict**, a shell parser would corrupt these |
+
+Note the fourth row: `it's a b's` has *balanced* quotes, so a naive balance
+check would silently turn it into `its a bs`. The argument-boundary rule is
+what prevents that.
+
+Verified on the capture host: 0 entries flipped to compat without their argv
+actually changing, and parse errors stayed at 0.
+
 ### DEV-7 — Lenient boolean handling
 
 Only `true`/`false` are valid per the specification. Legacy `1`/`0` are
@@ -187,36 +243,9 @@ These need a decision. They are **not** resolved unilaterally; current
 behaviour is pinned by `tests/unit/test_open_issues.py` so any change is
 deliberate.
 
-### OPEN-1 — Single quotes: specification compliance breaks real entries
+### ~~OPEN-1 — Single quotes~~
 
-**Severity: high. Blocks Phase 2.**
-
-The Desktop Entry specification reserves `'` and says it must not be used, so
-a compliant tokenizer treats it as an ordinary literal character. Real
-generated launchers use it as POSIX shell quoting anyway.
-
-**33 of 804 entries on the capture host are affected.** For example, Bottles
-writes:
-
-```text
-Exec=flatpak run --command=bottles-cli com.usebottles.bottles run -p EzRO -b 'EMU Stuff' -- %u
-```
-
-Strict parsing yields `... '-b', "'EMU", "Stuff'", '--']` — two broken
-arguments instead of one. GLib's `g_shell_parse_argv`, which real desktop
-environments use to launch these, honours the quoting and produces
-`EMU Stuff`.
-
-So "spec-compliant" and "launches the same way the desktop does" genuinely
-conflict here. Current behaviour is strict-plus-warning, because Phase 1
-imports nothing and the decision can be made where it matters.
-
-Options for Phase 2:
-
-1. Stay strict, and mark affected entries unsupported so §8's "do not silently
-   import a broken shortcut" is honoured.
-2. Match GLib and honour single quotes as shell-style quoting.
-3. Stay strict by default with an opt-in GLib-compatible mode.
+**Resolved. See DEV-8.**
 
 ### OPEN-2 — Desktop IDs are not unique
 
@@ -305,7 +334,7 @@ required before any of the first two can move out of "experimental". See
 | --- | --- |
 | XDG precedence tests pass | **yes** |
 | Hidden masking tests pass | **yes** |
-| Exec grammar fixtures pass | **yes**, with OPEN-1 outstanding |
+| Exec grammar fixtures pass | **yes** |
 | env-wrapper tests pass | **yes** |
 | persistent identity/AppID tests pass | not started (Phase 5) |
 | collision tests pass | not started (Phase 5) |

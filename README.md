@@ -26,8 +26,8 @@ Phase 7 rule "do not enable live writes until this phase passes".
 | 7 | Safe VDF commit | not started |
 | 8–11 | SteamGridDB, artwork UI, release gates | not started |
 
-See `CHECKLIST.md` for per-requirement status, deviations, and six open issues
-that need decisions.
+See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
+open issues.
 
 ## What works today
 
@@ -38,12 +38,16 @@ steam-desktop-importer debug roots
 # Discover and resolve every desktop entry.
 steam-desktop-importer debug scan --importable-only
 
+# List only entries whose Exec needed the compatibility tokenizer.
+steam-desktop-importer debug scan --nonstandard-only
+
 # Explain one desktop file in full.
 steam-desktop-importer debug desktop-entry /usr/share/applications/org.kde.kate.desktop
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
-4 masked by `Hidden=true`, and 9 shadowed lower-priority copies.
+4 masked by `Hidden=true`, 9 shadowed lower-priority copies, and 32 entries
+whose `Exec=` uses non-standard single-quote quoting.
 
 ## Development
 
@@ -80,6 +84,10 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
 
 - `.desktop` files are not treated as INI plus shell commands; `configparser`
   and `shlex` are not used.
+- The strict FreeDesktop `Exec=` grammar is always tried first. Compatibility
+  parsing is never global: it is retried per entry, only for a recognised
+  non-standard quoting pattern that the strict grammar would mis-tokenize, and
+  the entry is then marked `nonstandard_exec` / `exec_parse_mode="compat"`.
 - Applications are keyed by FreeDesktop desktop ID, never by basename.
 - `Hidden=true` masks lower-priority copies; `NoDisplay=true` does not.
 - `env VAR=value` wrappers are preserved verbatim in argv.

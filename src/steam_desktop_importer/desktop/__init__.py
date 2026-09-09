@@ -8,9 +8,12 @@ from .discovery import (
     ordered_application_roots,
 )
 from .exec_parser import (
+    PARSE_MODE_COMPAT,
+    PARSE_MODE_STRICT,
     ExecParseError,
     ExecParseResult,
     FieldCodeContext,
+    looks_like_shell_single_quoting,
     parse_exec,
     tokenize_exec,
     unescape_entry_value,
@@ -26,6 +29,8 @@ from .parser import (
 )
 
 __all__ = [
+    "PARSE_MODE_COMPAT",
+    "PARSE_MODE_STRICT",
     "ApplicationRoot",
     "DesktopEntryError",
     "DesktopEntryFile",
@@ -38,6 +43,7 @@ __all__ = [
     "desktop_id_for",
     "detect_source",
     "discover_applications",
+    "looks_like_shell_single_quoting",
     "ordered_application_roots",
     "parse_desktop_entry",
     "parse_exec",

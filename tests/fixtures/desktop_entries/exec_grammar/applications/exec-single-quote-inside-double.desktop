@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Single Quotes Inside Double Quotes
+Comment=Taken from a real WineZGUI launcher. The single quotes are inside a
+Comment[x-note]=double-quoted argument, where BOTH grammars agree they are literal
+Comment[x-note2]=characters. The strict parser is already correct, so this must stay
+Comment[x-note3]=in strict mode and must not be marked nonstandard.
+Exec=bash -c "'/var/home/example/.local/share/winezgui/Prefixes/AltInstaller/AltServer.sh'"
+Icon=single-quote-nested
+Terminal=false

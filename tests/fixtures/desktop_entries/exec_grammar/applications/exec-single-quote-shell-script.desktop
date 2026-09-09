@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Shell Script Launcher
+Comment=Taken from a real generated web-app launcher. The whole script, including
+Comment[x-note]=its embedded double quotes and its space-containing values, is one
+Comment[x-note2]=single-quoted argument to sh -c. The strict grammar shatters it into
+Comment[x-note3]=eight fragments; the compatibility tokenizer keeps it as one.
+Exec=sh -c 'XAPP_FORCE_GTKWINDOW_ICON="/home/example/logo.png" /usr/bin/browser --class WebApp --no-remote "https://example.invalid"'
+Icon=shell-script-launcher
+Terminal=false
