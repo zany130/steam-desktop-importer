@@ -1,0 +1,10 @@
+# An AppImage launcher written while the image was mounted, so Exec points
+# inside the runtime's temporary squashfs mount. That directory disappears
+# when the process exits, so a Steam shortcut built from it would break.
+# Section 10 puts unintegrated AppImages outside automatic MVP discovery.
+[Desktop Entry]
+Type=Application
+Name=Unintegrated AppImage
+Exec=/tmp/.mount_Exampl3XY/AppRun %U
+Icon=/tmp/.mount_Exampl3XY/example.png
+X-AppImage-Version=2.0.0

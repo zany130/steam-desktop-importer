@@ -1,0 +1,8 @@
+# The path-forwarding variant of --file-forwarding: "@@ ... @@" wraps file
+# arguments, where "@@u ... @@" wraps URIs. Both markers have to be removed
+# once the field code inside them expands to nothing. See CHECKLIST OPEN-3.
+[Desktop Entry]
+Type=Application
+Name=Flatpak Path Forwarding
+Exec=/usr/bin/flatpak run --branch=stable --file-forwarding org.example.FlatpakPathForward @@ %f @@
+X-Flatpak=org.example.FlatpakPathForward

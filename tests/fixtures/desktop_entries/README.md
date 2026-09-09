@@ -77,13 +77,22 @@ groups that must not leak into the main group, a file with no
 Provider export trees for source-kind detection.
 
 `flatpak_user_exports/` includes a `--file-forwarding` export whose **last
-token is not the app ID**, a export with no `X-Flatpak` key so the ID must be
-recovered from argv, and one using a full `app/ID/arch/branch` ref.
+token is not the app ID**, an export with no `X-Flatpak` key so the ID must be
+recovered from argv, one using a full `app/ID/arch/branch` ref, and
+`org.example.FlatpakPathForward` covering the `@@ … @@` path-forwarding
+variant alongside the more common `@@u … @@`.
 
 `snapd_desktop/` includes a snapd export behind an `env` wrapper, so detection
 has to look past the wrapper without rewriting it.
 
-`native_data/` holds an integrated AppImage and a plain native application.
+`native_data/` holds an integrated AppImage, a plain native application, and
+`org.example.AppImageTransient` whose command points inside the AppImage
+runtime's temporary `.mount_*` directory. The Phase 2 adapter refuses that
+one: the path will not exist after the process exits, so a shortcut built
+from it would break.
+
+These double as the Phase 2 launch-adapter fixtures; see
+`tests/unit/test_launch_adapters.py`.
 
 ## `id_collision/`
 

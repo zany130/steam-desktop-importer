@@ -3,11 +3,14 @@
 IMPLEMENTATION.md §33 asks for project-native debug tooling "rather than
 ad-hoc scripts that guess the first userdata directory".
 
-Only the commands that Phase 1 can actually support are implemented:
-``debug roots``, ``debug scan`` and ``debug desktop-entry``. The Steam-facing
-commands from §33 (``debug dump-shortcuts``, ``debug identity``) need Phase 4,
-5 and 6 and are deliberately absent rather than stubbed, so that no command
-can appear to work while returning guessed data.
+Only the commands that Phases 1 and 2 can actually support are implemented:
+``debug roots``, ``debug scan``, ``debug desktop-entry`` and ``debug launch``.
+The Steam-facing commands from §33 (``debug dump-shortcuts``, ``debug
+identity``) need Phase 4, 5 and 6 and are deliberately absent rather than
+stubbed, so that no command can appear to work while returning guessed data.
+
+``debug launch`` prints the command a shortcut *would* use. It never executes
+it and never writes to Steam.
 
 There is no GUI yet. §31 puts the GUI at Phase 3.
 """
@@ -24,6 +27,7 @@ from .desktop.discovery import (
     ordered_application_roots,
 )
 from .desktop.parser import DesktopEntryError, build_application, parse_desktop_entry
+from .launch import LaunchAdapterError, build_launch_vector
 from .models import DesktopApplication
 
 
@@ -163,6 +167,71 @@ def _print_desktop_entry(args: argparse.Namespace) -> int:
         print("warnings")
         for warning in app.parse_warnings:
             print(f"    {warning}")
+
+    _print_launch_section(app)
+    return 0
+
+
+def _print_launch_section(app: DesktopApplication) -> None:
+    """Show the Phase 2 launch vector, or why there is not one."""
+    try:
+        vector = build_launch_vector(app)
+    except LaunchAdapterError as error:
+        print(f"launch vector       <none: {error}>")
+        print(f"launch reason code  {error.code}")
+        return
+
+    print(f"launch adapter      {vector.adapter}")
+    print(f"launch exe          {vector.exe}")
+    print(f"launch arguments    {list(vector.arguments)}")
+    print(f"launch StartDir     {vector.start_dir or '(empty)'}")
+    for warning in vector.warnings:
+        print(f"    launch warning  {warning}")
+
+
+def _print_launch(args: argparse.Namespace) -> int:
+    """Show launch vectors for discovered entries, without writing Steam."""
+    result = discover_applications()
+
+    selected = list(result.applications.values())
+    if args.desktop_id:
+        selected = [app for app in selected if app.desktop_id == args.desktop_id]
+        if not selected:
+            print(f"error: no resolved entry with desktop ID {args.desktop_id!r}", file=sys.stderr)
+            return 1
+    elif not args.all:
+        selected = [app for app in selected if not app.no_display]
+
+    built = 0
+    refused: list[tuple[str, str]] = []
+    for app in selected:
+        try:
+            vector = build_launch_vector(app)
+        except LaunchAdapterError as error:
+            refused.append((app.desktop_id, error.code))
+            continue
+        built += 1
+        if args.desktop_id or args.verbose:
+            print(app.desktop_id)
+            print(f"    adapter     {vector.adapter}")
+            print(f"    exe         {vector.exe}")
+            print(f"    arguments   {list(vector.arguments)}")
+            print(f"    StartDir    {vector.start_dir or '(empty)'}")
+            for warning in vector.warnings:
+                print(f"    warning     {warning}")
+
+    if args.desktop_id:
+        return 0
+
+    print()
+    print(f"considered          {len(selected)}")
+    print(f"launch vectors      {built}")
+    print(f"refused             {len(refused)}")
+    counts: dict[str, int] = {}
+    for _, code in refused:
+        counts[code] = counts.get(code, 0) + 1
+    for code, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+        print(f"    {code}: {count}")
     return 0
 
 
@@ -195,6 +264,15 @@ def build_parser() -> argparse.ArgumentParser:
     entry = debug_commands.add_parser("desktop-entry", help="explain one desktop file")
     entry.add_argument("path")
     entry.set_defaults(func=_print_desktop_entry)
+
+    launch = debug_commands.add_parser(
+        "launch",
+        help="show launch vectors (Phase 2); never runs or writes anything",
+    )
+    launch.add_argument("desktop_id", nargs="?", help="limit to one desktop ID")
+    launch.add_argument("--all", action="store_true", help="include NoDisplay entries")
+    launch.add_argument("--verbose", action="store_true", help="print every vector")
+    launch.set_defaults(func=_print_launch)
 
     return parser
 

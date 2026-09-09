@@ -8,7 +8,7 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0 and 1 are implemented. Nothing else is.**
+**Phases 0, 1 and 2 are implemented. Nothing else is.**
 
 There is no GUI yet, and no code path writes to a Steam directory. A test
 (`test_package_performs_no_filesystem_writes`) enforces that, in line with the
@@ -18,7 +18,7 @@ Phase 7 rule "do not enable live writes until this phase passes".
 | --- | --- | --- |
 | 0 | Fixtures and format characterization | done |
 | 1 | XDG discovery and Desktop Entry parsing | done |
-| 2 | Launch adapters | not started |
+| 2 | Launch adapters | done |
 | 3 | GUI | not started |
 | 4 | Steam install/account discovery | fixtures only |
 | 5 | Persistent state and AppID allocation | not started |
@@ -43,6 +43,10 @@ steam-desktop-importer debug scan --nonstandard-only
 
 # Explain one desktop file in full.
 steam-desktop-importer debug desktop-entry /usr/share/applications/org.kde.kate.desktop
+
+# Show the command a shortcut would run. Never executes it, never writes.
+steam-desktop-importer debug launch us.zoom.Zoom.desktop
+steam-desktop-importer debug launch          # summary across all entries
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
@@ -50,6 +54,16 @@ On the development host `debug scan` resolves 804 entries with 0 parse errors,
 whose `Exec=` uses non-standard single-quote quoting. Two entries are held
 back from import, leaving 777 importable: one desktop ID collision and one
 `Exec=` whose shell quote-escaping we cannot parse correctly.
+
+All 777 produce a launch vector — 503 native, 237 Flatpak, 37 AppImage — with
+no warnings and no leftover Flatpak file-forwarding markers. For example
+`us.zoom.Zoom` becomes:
+
+```text
+exe         /usr/bin/flatpak
+arguments   ['run', '--branch=stable', '--arch=x86_64', '--command=zoom', 'us.zoom.Zoom']
+StartDir    (empty)
+```
 
 ## Development
 

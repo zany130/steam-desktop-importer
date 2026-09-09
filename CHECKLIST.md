@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phase 0 and Phase 1 complete. 188 tests passing.**
+**Current state: Phases 0, 1 and 2 complete. 214 tests passing.**
 No code in this repository writes to any Steam directory, and a test enforces
 that (`test_package_performs_no_filesystem_writes`).
 
@@ -91,15 +91,56 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `debug roots`
 - [x] `debug scan`
 - [x] `debug desktop-entry <path>`
+- [x] `debug launch [desktop-id]` — Phase 2 vectors; never runs or writes
 - [ ] `debug dump-shortcuts` — needs Phase 4/6
 - [ ] `debug identity` — needs Phase 4/5
 
 Deliberately absent rather than stubbed, so no command can appear to work
 while returning guessed data.
 
+## Phase 2 — Launch adapters (§10)
+
+Complete. Command vectors are produced and verified; nothing writes to Steam.
+`LaunchVector` carries `exe`, tokenized `arguments`, `start_dir` and the
+adapter name. Arguments stay tokenized because Steam stores them as one
+`LaunchOptions` string, and quoting that correctly is Phase 6 serialization —
+flattening here would destroy the boundaries needed to do it.
+
+- [x] Native — resolved executable plus parsed arguments
+- [x] Flatpak — exported command preserved, forwarding scaffolding removed
+- [x] Snap — exported launch semantics used as published
+- [x] AppImage — persistent path treated as a normal executable
+- [x] Unintegrated AppImages refused (§10 puts them outside MVP discovery)
+- [x] `env VAR=value` preserved as `exe=env` plus leading arguments (rule 5)
+- [x] `StartDir` from `Path=` or empty, never inferred (rule 6)
+- [x] Flatpak app ID never assumed to be the final token (§10)
+- [x] No universal Snap executable path invented (§10)
+
+Adapters are **preserving by default**. The desktop entry already contains a
+working command, so the job is to carry it across faithfully rather than
+rebuild it from provider metadata. Rebuilding a Flatpak as `flatpak run <id>`
+would silently drop `--nosocket`, `--env` and `--command` flags the package
+was published with; `org.example.FlatpakNoMetadata` is the fixture that pins
+this, and it also has an argument *after* the app ID so that any "last token
+is the ID" shortcut fails loudly.
+
+### DEV-10 — Support determination is two-stage
+
+Phase 1 decides support from the entry; Phase 2 can still refuse. Currently
+one adapter-level refusal exists, `appimage_not_integrated`, because whether
+an AppImage path is transient is a launch concern rather than a parse one.
+`build_launch_vector` also refuses anything Phase 1 already rejected, so the
+adapter cannot route around earlier checks.
+
+Consequence to keep in mind for Phase 3: `supported_for_import` is necessary
+but not sufficient. The GUI must call the adapter to know an entry is truly
+importable. On the capture host 777 entries are supported and all 777 produce
+a vector, so the gap is currently empty — but it is real and untested against
+a transient AppImage in the wild.
+
 ## Not started
 
-Phases 2–11, and §11–§30 in general. Specifically **not** implemented, as
+Phases 3–11, and §11–§30 in general. Specifically **not** implemented, as
 instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
@@ -296,7 +337,7 @@ deliberate.
 | OPEN-1 single quotes | high | **resolved** → DEV-8 |
 | OPEN-2 desktop ID collisions | medium | **resolved** — implemented |
 | OPEN-2a does a collision block import? | medium | **resolved** — implemented |
-| OPEN-3 Flatpak file-forwarding markers | medium | **decided** — Phase 2 |
+| OPEN-3 Flatpak file-forwarding markers | medium | **resolved** — implemented + measured |
 | OPEN-4 malformed booleans | low | **open** — conservative `Hidden` policy needed before release |
 | OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
 | OPEN-6 `LastPlayTime` for new shortcuts | low | default proposed |
@@ -388,9 +429,10 @@ Verified against the capture host: the real
 `ons-dev.vencord.Vesktop.desktop` collision is detected, blocks import
 (importable 779 → 778), and is lifted by acknowledgement.
 
-### OPEN-3 — Flatpak `--file-forwarding` markers survive `%U` removal
+### ~~OPEN-3 — Flatpak `--file-forwarding` markers survive `%U` removal~~
 
-**Severity: medium. Phase 2 work. Decided 2026-09-09.**
+**Resolved 2026-09-09. Implemented in the Phase 2 Flatpak adapter, and the
+open empirical question has now been answered.**
 
 `--file-forwarding` wraps document arguments in `@@u` and `@@`. Dropping `%U`
 correctly leaves those markers behind:
@@ -405,12 +447,39 @@ the Phase 2 Flatpak adapter strips the marker block *and* the
 always the case for Steam shortcuts. Confirmed against a real export
 (`us.zoom.Zoom`).
 
-Note this was decided without empirically confirming whether `flatpak` would
-have consumed the stray markers harmlessly on its own. Stripping is the safe
-direction either way — it cannot leave literal `@@u` in argv — but the
-adapter should still get a test proving the stripped command launches.
+#### Empirical result — stripping was *not* strictly necessary
 
-**Not yet implemented.** Phase 2 has not started.
+The decision was taken without knowing whether `flatpak` consumes stray
+markers itself. It does. Measured with a real Flatpak, using `--command=echo`
+so nothing real launches:
+
+| Command | Application receives |
+| --- | --- |
+| `flatpak run --command=echo --file-forwarding us.zoom.Zoom HELLO @@u @@` | `HELLO` |
+| `flatpak run --command=echo us.zoom.Zoom HELLO @@u @@` | `HELLO @@u @@` |
+
+So with `--file-forwarding` present the markers never reach the application,
+and leaving them would have been harmless. Stripping is kept anyway: it makes
+the stored shortcut self-explanatory and does not depend on undocumented
+`flatpak` argument handling staying the way it is. This is now a *preference*,
+not a correctness fix, and the checklist says so rather than implying the
+importer discovered a bug.
+
+The second row is load-bearing in the other direction: **without** the flag
+the markers are ordinary arguments and reach the application, which is why
+`_strip_file_forwarding` refuses to touch argv unless `--file-forwarding` is
+actually present.
+
+#### Implemented
+
+`_strip_file_forwarding` in `launch/adapters.py` removes `--file-forwarding`
+together with every `@@`/`@@u` … `@@` region, but only when all such regions
+are empty. A region that still holds arguments, or one that is unterminated,
+leaves argv untouched and records a warning; a half-removed forwarding block
+would be worse than an untouched one.
+
+Verified on the capture host: 0 of 804 entries retain a marker or the flag,
+and no launch vector produced a warning.
 
 ### OPEN-4 — Invalid booleans fall back in an unsafe direction
 
