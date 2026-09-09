@@ -289,11 +289,21 @@ def test_scan_order_is_deterministic(tmp_path):
     first = list(discover_applications(roots=roots_from([root])).applications)
     second = list(discover_applications(roots=roots_from([root])).applications)
     assert first == second
+
+    # Ordering is lexical on the whole absolute path, not directory-by-
+    # directory walk order, so a top-level file sorts against nested ones
+    # rather than always preceding them: "a.desktop" < "a/a.desktop" because
+    # "." < "/", and "a/b.desktop" < "b.desktop" because "a" < "b".
+    #
+    # The exact order matters beyond reproducibility. It is the tie-break that
+    # decides which file wins a same-root desktop ID collision (OPEN-2), so it
+    # has to be a property of the paths themselves and not of the order the
+    # filesystem happened to hand directories to os.walk.
     assert first == [
         "a.desktop",
-        "b.desktop",
         "a-a.desktop",
         "a-b.desktop",
+        "b.desktop",
         "z-a.desktop",
         "z-b.desktop",
     ]

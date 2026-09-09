@@ -37,22 +37,133 @@ def test_resolved_open_1_nonstandard_exec_is_marked_on_the_application(exec_gram
     assert ordinary.exec_parse_mode == "strict"
 
 
-def test_open_2_desktop_ids_can_collide_between_nested_and_dashed_paths():
-    """OPEN-2: the FreeDesktop ID scheme is not injective.
+def test_resolved_open_2_collisions_resolve_to_one_entry_but_block_import():
+    """OPEN-2/2a: the FreeDesktop ID scheme is not injective.
 
     ``vendor/app.desktop`` and ``vendor-app.desktop`` in the same root both
     derive to ``vendor-app.desktop``. Observed for real on the capture host.
-    §6 keys persistent importer state on the desktop ID, so a collision means
-    two different applications would share one state row.
+
+    Identity and importability are separated. Discovery still resolves exactly
+    one entry for the ID, keeping §6's state key untouched, but withholds
+    import consent so a state row can never be keyed to an ambiguous ID.
     """
     root = DESKTOP_ENTRIES / "id_collision" / "applications"
+    flat = root / "vendor-app.desktop"
+    nested = root / "vendor" / "app.desktop"
+
     result = discover_applications(roots=[ApplicationRoot(root, "test")])
 
+    # One effective application per desktop ID.
     assert list(result.applications) == ["vendor-app.desktop"]
-    # §7.4's "first match wins" resolves it deterministically, and the loser
-    # is recorded rather than silently discarded.
-    assert result.applications["vendor-app.desktop"].name == "Flat File With A Dash"
-    assert result.shadowed == [("vendor-app.desktop", root / "vendor" / "app.desktop")]
+    app = result.applications["vendor-app.desktop"]
+    assert app.name == "Flat File With A Dash"
+    assert result.shadowed == [("vendor-app.desktop", nested)]
+
+    # ... but it is not importable until the ambiguity is acknowledged.
+    assert app.supported_for_import is False
+    assert app.unsupported_code == "desktop_id_collision"
+    assert str(nested) in (app.unsupported_reason or "")
+    assert result.importable == []
+
+    # Every colliding path is retained for debugging, winner included.
+    assert app.has_collision is True
+    assert app.collision_paths == [flat, nested]
+
+    # The diagnostic names the losing file, which `shadowed` alone does not
+    # distinguish from ordinary cross-root precedence.
+    assert len(result.collisions) == 1
+    collision = result.collisions[0]
+    assert collision.desktop_id == "vendor-app.desktop"
+    assert collision.root == root
+    assert collision.paths == (flat, nested)
+    assert collision.winner == flat
+
+
+def test_resolved_open_2_acknowledging_a_collision_lifts_the_import_block():
+    """The block is consent, not a permanent verdict; the diagnostic remains."""
+    root = DESKTOP_ENTRIES / "id_collision" / "applications"
+    result = discover_applications(
+        roots=[ApplicationRoot(root, "test")],
+        acknowledged_collisions={"vendor-app.desktop"},
+    )
+
+    app = result.applications["vendor-app.desktop"]
+    assert app.supported_for_import is True
+    assert app.unsupported_code is None
+    assert result.importable == [app]
+
+    # Acknowledging suppresses the block, never the evidence.
+    assert app.collision_paths == [root / "vendor-app.desktop", root / "vendor" / "app.desktop"]
+    assert len(result.collisions) == 1
+
+
+def test_resolved_open_2_a_collision_in_a_lower_root_is_not_reported(tmp_path):
+    """Precedence already settles cross-root duplicates, so there is no tie.
+
+    Only files that collide at the *same* precedence level need a tie-break.
+    A lower root's collision cannot change the outcome, so it is shadowed
+    normally and must not withhold import consent from the winning entry.
+    """
+    entry = "[Desktop Entry]\nType=Application\nName=X\nExec=/bin/true\n"
+
+    high = tmp_path / "high" / "applications"
+    high.mkdir(parents=True)
+    (high / "vendor-app.desktop").write_text(entry)
+
+    low = tmp_path / "low" / "applications"
+    (low / "vendor").mkdir(parents=True)
+    (low / "vendor-app.desktop").write_text(entry)
+    (low / "vendor" / "app.desktop").write_text(entry)
+
+    result = discover_applications(
+        roots=[ApplicationRoot(high, "test"), ApplicationRoot(low, "test")]
+    )
+
+    app = result.applications["vendor-app.desktop"]
+    assert app.source_root == high
+    assert app.supported_for_import is True
+    assert app.collision_paths == []
+    assert result.collisions == []
+    assert len(result.shadowed) == 2
+
+
+def test_resolved_open_2_an_unparsable_winner_yields_to_the_next_candidate(tmp_path):
+    """Unparsable files never claim an ID, and that rule survives collisions."""
+    root = tmp_path / "applications"
+    (root / "vendor").mkdir(parents=True)
+    (root / "vendor-app.desktop").write_text("this is not a desktop entry\n")
+    (root / "vendor" / "app.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Nested Winner\nExec=/bin/true\n"
+    )
+
+    result = discover_applications(roots=[ApplicationRoot(root, "test")])
+
+    app = result.applications["vendor-app.desktop"]
+    assert app.name == "Nested Winner"
+    assert app.desktop_path == root / "vendor" / "app.desktop"
+    assert [path for path, _ in result.errors] == [root / "vendor-app.desktop"]
+
+    # The lexically first path still counts as colliding even though it lost
+    # on parseability rather than on ordering.
+    assert result.collisions[0].winner == root / "vendor" / "app.desktop"
+    assert app.supported_for_import is False
+
+
+def test_resolved_open_2_an_already_unsupported_winner_keeps_its_own_reason(tmp_path):
+    """A collision must not mask a more useful parse-level explanation."""
+    root = tmp_path / "applications"
+    (root / "vendor").mkdir(parents=True)
+    (root / "vendor-app.desktop").write_text("[Desktop Entry]\nType=Application\nName=No Exec\n")
+    (root / "vendor" / "app.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=X\nExec=/bin/true\n"
+    )
+
+    result = discover_applications(roots=[ApplicationRoot(root, "test")])
+
+    app = result.applications["vendor-app.desktop"]
+    assert app.supported_for_import is False
+    assert app.unsupported_code == "no_exec"
+    assert app.has_collision is True
 
 
 def test_open_3_flatpak_file_forwarding_markers_survive_field_code_removal(sources_dir):

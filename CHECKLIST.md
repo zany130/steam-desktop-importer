@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phase 0 and Phase 1 complete. 177 tests passing.**
+**Current state: Phase 0 and Phase 1 complete. 181 tests passing.**
 No code in this repository writes to any Steam directory, and a test enforces
 that (`test_package_performs_no_filesystem_writes`).
 
@@ -246,8 +246,8 @@ deliberate.
 | Issue | Severity | Status |
 | --- | --- | --- |
 | OPEN-1 single quotes | high | **resolved** → DEV-8 |
-| OPEN-2 desktop ID collisions | medium | **decided** — not yet implemented |
-| OPEN-2a does a collision block import? | medium | **decided** — not yet implemented |
+| OPEN-2 desktop ID collisions | medium | **resolved** — implemented |
+| OPEN-2a does a collision block import? | medium | **resolved** — implemented |
 | OPEN-3 Flatpak file-forwarding markers | medium | **decided** — Phase 2 |
 | OPEN-4 invalid booleans | low | default proposed |
 | OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
@@ -302,16 +302,39 @@ Identity and importability are **separate concerns**:
 So discovery never refuses to *resolve* a colliding ID, and never emits two
 entries for it; it resolves one and withholds import consent.
 
-**Not yet implemented.** Current behaviour is §7.4 first-match-wins, loser
-recorded in `DiscoveryResult.shadowed`, no diagnostic, no import block, pinned
-by `test_open_2_desktop_ids_can_collide_between_nested_and_dashed_paths`.
-Implementing points 5–9 requires:
+#### Implemented 2026-09-09
 
-- a deterministic same-level tie-break in `discover_applications`,
-- a `desktop_id_collision` diagnostic carrying every colliding source path,
-- an unsupported-reason on the winning `DesktopApplication`,
-- an acknowledgement path so the user can lift the block,
-- updating the pinning test to assert the new behaviour.
+All nine points are in place:
+
+- `_desktop_files` now sorts on the **whole absolute path string** rather than
+  relying on `os.walk` order, so the tie-break is a property of the paths and
+  not of the filesystem. This reorders scan output: a top-level file no longer
+  automatically precedes nested ones (`a.desktop` < `a/a.desktop` < `b.desktop`).
+- `_group_by_desktop_id` collects each root's files per ID, which makes a
+  same-level collision visible without a second pass.
+- `DesktopIdCollision` records the ID, root, every colliding path, and the
+  winner. Exposed as `DiscoveryResult.collisions` and printed by `debug scan`.
+- `DesktopApplication.collision_paths` / `.has_collision` retain the losing
+  paths on the resolved entry.
+- `UnsupportedCode.DESKTOP_ID_COLLISION` withholds import consent. It is the
+  only *liftable* unsupported code.
+- `discover_applications(acknowledged_collisions=...)` lifts the block while
+  keeping the diagnostic.
+
+Behaviours worth noting, each covered by a test:
+
+- A collision in a **lower-priority** root is not reported, because precedence
+  already settled the ID and the tie is moot.
+- An **unparsable** lexical winner still yields to the next candidate; the
+  existing "unparsable files do not claim an ID" rule survives collisions.
+- An entry that is **already unsupported** keeps its original reason, since
+  that is more useful than the collision; `collision_paths` stays populated.
+- Acknowledgement is currently a per-call argument. Persisting it belongs with
+  §6 state in Phase 5.
+
+Verified against the capture host: the real
+`ons-dev.vencord.Vesktop.desktop` collision is detected, blocks import
+(importable 779 → 778), and is lifted by acknowledgement.
 
 ### OPEN-3 — Flatpak `--file-forwarding` markers survive `%U` removal
 

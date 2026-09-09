@@ -43,6 +43,13 @@ class UnsupportedCode:
     EXEC_EMPTY_AFTER_EXPANSION = "exec_empty_after_expansion"
     TERMINAL_UNSUPPORTED = "terminal_unsupported"
     DBUS_ACTIVATABLE_NO_EXEC = "dbus_activatable_no_exec"
+    DESKTOP_ID_COLLISION = "desktop_id_collision"
+    """Several files in one root derive this desktop ID. See CHECKLIST OPEN-2.
+
+    Unlike the other codes this one is *liftable*: the entry is perfectly
+    valid, but importing it would make the §6 state row ambiguous, so import
+    consent is withheld until the user acknowledges the collision.
+    """
 
     # Availability rather than support: the entry is fine, the software is not
     # currently installed or reachable.
@@ -134,10 +141,24 @@ class DesktopApplication:
     parse_warnings: list[str] = field(default_factory=list)
     """Non-fatal problems found while parsing. Surfaced, never swallowed."""
 
+    collision_paths: list[Path] = field(default_factory=list)
+    """Every file in this entry's root that derives the same desktop ID.
+
+    Empty in the normal case. When populated it includes ``desktop_path``
+    itself and is in the same stable lexical order discovery used to pick the
+    winner, so the losing files stay visible for debugging. See CHECKLIST
+    OPEN-2.
+    """
+
     @property
     def is_available(self) -> bool:
         """False only when the entry itself is fine but the software is not."""
         return self.unsupported_code not in AVAILABILITY_CODES
+
+    @property
+    def has_collision(self) -> bool:
+        """Whether this entry's desktop ID was claimed by more than one file."""
+        return len(self.collision_paths) > 1
 
 
 @dataclass

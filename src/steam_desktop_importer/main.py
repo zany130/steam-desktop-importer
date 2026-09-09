@@ -76,6 +76,12 @@ def _print_scan(args: argparse.Namespace) -> int:
     print(f"nonstandard Exec   {nonstandard}")
     print(f"masked by Hidden   {len(result.masked_ids)}")
     print(f"shadowed copies    {len(result.shadowed)}")
+    print(f"ID collisions      {len(result.collisions)}")
+    for collision in result.collisions:
+        print(f"    {collision.desktop_id} in {collision.root}")
+        for path in collision.paths:
+            marker = "winner" if path == collision.winner else "shadowed"
+            print(f"        [{marker}] {path}")
     print(f"parse errors       {len(result.errors)}")
     for path, message in result.errors:
         print(f"    {path}: {message}")

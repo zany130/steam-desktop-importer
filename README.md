@@ -46,8 +46,9 @@ steam-desktop-importer debug desktop-entry /usr/share/applications/org.kde.kate.
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
-4 masked by `Hidden=true`, 9 shadowed lower-priority copies, and 32 entries
-whose `Exec=` uses non-standard single-quote quoting.
+4 masked by `Hidden=true`, 9 shadowed lower-priority copies, 32 entries whose
+`Exec=` uses non-standard single-quote quoting, and 1 desktop ID collision
+(which is held back from import, leaving 778 importable).
 
 ## Development
 
@@ -89,6 +90,10 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
   non-standard quoting pattern that the strict grammar would mis-tokenize, and
   the entry is then marked `nonstandard_exec` / `exec_parse_mode="compat"`.
 - Applications are keyed by FreeDesktop desktop ID, never by basename.
+- The desktop ID scheme is not injective, so two files in one root can derive
+  the same ID. Discovery breaks the tie deterministically to keep exactly one
+  entry per ID, then withholds import consent until the collision is
+  acknowledged, so persistent state is never keyed to an ambiguous ID.
 - `Hidden=true` masks lower-priority copies; `NoDisplay=true` does not.
 - `env VAR=value` wrappers are preserved verbatim in argv.
 - `StartDir` comes from `Path=` or stays empty; it is never inferred from the
