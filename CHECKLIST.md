@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0, 1 and 2 complete. 214 tests passing.**
+**Current state: Phases 0, 1, 2 and 4 complete. 241 tests passing.**
 No code in this repository writes to any Steam directory, and a test enforces
 that (`test_package_performs_no_filesystem_writes`).
 
@@ -92,8 +92,9 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `debug scan`
 - [x] `debug desktop-entry <path>`
 - [x] `debug launch [desktop-id]` — Phase 2 vectors; never runs or writes
-- [ ] `debug dump-shortcuts` — needs Phase 4/6
-- [ ] `debug identity` — needs Phase 4/5
+- [x] `debug steam` — Phase 4 installations and accounts; read-only
+- [ ] `debug dump-shortcuts` — needs Phase 6
+- [ ] `debug identity` — needs Phase 5
 
 Deliberately absent rather than stubbed, so no command can appear to work
 while returning guessed data.
@@ -138,9 +139,71 @@ importable. On the capture host 777 entries are supported and all 777 produce
 a vector, so the gap is currently empty — but it is real and untested against
 a transient AppImage in the wild.
 
+## Phase 4 — Steam install/account discovery (§12–§13)
+
+Complete, and entirely read-only.
+
+### §12 Installations
+
+- [x] Native probing around `~/.local/share/Steam` and `~/.steam/{steam,root,Steam}`
+- [x] Flatpak probing below `~/.var/app/com.valvesoftware.Steam/`, canonical
+      and compatibility locations
+- [x] Validation by **structure** — `userdata/` plus `steamapps/` or `config/`
+- [x] Symlink resolution and de-duplication
+- [x] Never silently uses the first path that exists (rule 7)
+- [x] `SteamInstallation.key` for §6's installation-specific state
+
+The capture host is the reason de-duplication is not optional:
+`~/.local/share/Steam`, `~/.steam/steam` and `~/.steam/root` all resolve to
+one directory, so probing alone offers the same install three times.
+
+Flatpak installations carry `is_experimental` and say so in `display_name`.
+Having a fixture does not validate any §11 runtime behaviour.
+
+### §13 Accounts
+
+- [x] `userdata/<account_id32>/` enumerated **first**, as source of truth
+- [x] `loginusers.vdf` and `registry.vdf` used as optional hints only
+- [x] Accounts absent from `loginusers.vdf` are still offered
+- [x] Malformed or missing hint files degrade to "no hints", never an error
+- [x] One account auto-selects; several always require confirmation (rule 8)
+- [x] Timestamp never decides on its own
+
+`registry.vdf` holds an *account name*, not an ID, so correlating it to a
+`userdata/` directory needs `loginusers.vdf`. It also lives outside the Steam
+root, which is why `SteamInstallation.registry_path` exists as an additive
+field rather than being derived from `root`.
+
+Ranking order is `registry-autologinuser` → `loginusers-mostrecent` →
+`loginusers-autologin` → timestamp. The multi-account fixture is adversarial
+on purpose: `registry.vdf` names alpha, `AutoLogin=1` names beta, and beta
+also has the newer timestamp. Confirmation is required regardless of how the
+ranking comes out.
+
+### DEV-11 — `userdata/0` is treated as non-viable
+
+§13 says to enumerate "viable accounts" without defining viability. Steam
+creates `userdata/0` as a placeholder rather than as a signed-in account, so
+non-positive IDs are excluded; importing into it would write to a directory
+that belongs to no one. Non-numeric entries such as `anonymous` are skipped
+for the same reason. Recorded because §13 does not spell this out.
+
+Verified on the capture host: 1 installation (3 aliases collapsed), 1 account,
+all three hints present, resolved without a prompt.
+
+### Not yet done, and deliberately so
+
+§13 asks for the chosen account to be persisted per installation and §12 for
+the chosen installation to be remembered. Both selectors accept a remembered
+value and honour it, but **storing** it is Phase 5 (SQLite). Nothing here
+writes.
+
+`§14 Steam running detection` is *not* implemented. It gates writing, so it
+belongs with Phase 7 rather than here.
+
 ## Not started
 
-Phases 3–11, and §11–§30 in general. Specifically **not** implemented, as
+Phases 3, 5–11, and §14–§30 in general. Specifically **not** implemented, as
 instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
@@ -530,7 +593,7 @@ Carried forward from §32 and §36. None of these were validated:
 | Item | Why not |
 | --- | --- |
 | TEST-001 Flatpak Steam host launching | No Flatpak Steam on the capture host |
-| TEST-002 Account-selection hints | Only one Steam account available |
+| TEST-002 Account-selection hints | Only one Steam account available; multi-account logic is fixture-tested only |
 | TEST-003 `FlatpakAppID` | Requires live A/B shortcuts |
 | TEST-004 `ShortcutPath` | Requires live A/B shortcuts |
 | TEST-005 Artwork hot reload | Requires a running Steam |

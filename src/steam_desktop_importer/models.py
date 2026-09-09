@@ -167,14 +167,43 @@ class DesktopApplication:
         return len(self.collision_paths) > 1
 
 
-@dataclass
+@dataclass(frozen=True)
 class SteamInstallation:
-    """IMPLEMENTATION.md §5.2. Unused until Phase 4."""
+    """IMPLEMENTATION.md §5.2."""
 
     kind: str  # native | flatpak
     root: Path
     userdata_root: Path
     display_name: str
+
+    # ------------------------------------------------------------------
+    # Additive fields (not in §5.2). All defaulted.
+    # ------------------------------------------------------------------
+
+    registry_path: Path | None = None
+    """Location of ``registry.vdf``, which lives *outside* ``root``.
+
+    On a native install it is ``~/.steam/registry.vdf`` while
+    ``loginusers.vdf`` is at ``<root>/config/``, so it cannot be derived from
+    ``root``. See docs/PHASE0_FORMAT_CHARACTERIZATION.md §3.2. ``None`` when
+    the file is absent, which §13 requires callers to tolerate.
+    """
+
+    @property
+    def key(self) -> str:
+        """Stable identifier for this installation.
+
+        §6 keys persistent state on ``(steam_installation_key,
+        steam_account_id32, desktop_id)``. The root is already symlink-resolved
+        by discovery, so this is stable across the ``~/.steam/*`` aliases that
+        point at the same directory.
+        """
+        return f"{self.kind}:{self.root}"
+
+    @property
+    def is_experimental(self) -> bool:
+        """Flatpak Steam is experimental until §11's matrix passes."""
+        return self.kind == "flatpak"
 
 
 @dataclass

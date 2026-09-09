@@ -3,14 +3,15 @@
 IMPLEMENTATION.md §33 asks for project-native debug tooling "rather than
 ad-hoc scripts that guess the first userdata directory".
 
-Only the commands that Phases 1 and 2 can actually support are implemented:
-``debug roots``, ``debug scan``, ``debug desktop-entry`` and ``debug launch``.
-The Steam-facing commands from §33 (``debug dump-shortcuts``, ``debug
-identity``) need Phase 4, 5 and 6 and are deliberately absent rather than
+Only the commands that Phases 1, 2 and 4 can actually support are implemented:
+``debug roots``, ``debug scan``, ``debug desktop-entry``, ``debug launch`` and
+``debug steam``. The remaining §33 commands (``debug dump-shortcuts``, ``debug
+identity``) need Phase 5 and 6 and are deliberately absent rather than
 stubbed, so that no command can appear to work while returning guessed data.
 
 ``debug launch`` prints the command a shortcut *would* use. It never executes
-it and never writes to Steam.
+it and never writes to Steam. ``debug steam`` reads Steam's configuration and
+never writes to it.
 
 There is no GUI yet. §31 puts the GUI at Phase 3.
 """
@@ -29,6 +30,12 @@ from .desktop.discovery import (
 from .desktop.parser import DesktopEntryError, build_application, parse_desktop_entry
 from .launch import LaunchAdapterError, build_launch_vector
 from .models import DesktopApplication
+from .steam import (
+    discover_accounts,
+    discover_installations,
+    select_account,
+    select_installation,
+)
 
 
 def _print_roots(args: argparse.Namespace) -> int:
@@ -189,6 +196,53 @@ def _print_launch_section(app: DesktopApplication) -> None:
         print(f"    launch warning  {warning}")
 
 
+def _print_steam(args: argparse.Namespace) -> int:
+    """Show Steam installations and accounts. Read-only (§12-§13)."""
+    installations = discover_installations()
+    selection = select_installation(installations)
+
+    print(f"installations       {len(installations)}")
+    if not installations:
+        print("  none found (probed the §12 native and Flatpak locations)")
+        return 1
+
+    for installation in installations:
+        marker = "*" if installation == selection.selected else " "
+        print(f" {marker} [{installation.kind}] {installation.root}")
+        print(f"      userdata      {installation.userdata_root}")
+        print(f"      registry.vdf  {installation.registry_path or '(absent)'}")
+        print(f"      key           {installation.key}")
+        if installation.is_experimental:
+            print("      note          Flatpak Steam is experimental (§11)")
+
+    print(f"selection           {selection.reason}")
+    print(f"needs confirmation  {selection.requires_confirmation}")
+
+    for installation in installations:
+        print()
+        print(f"accounts in {installation.root}")
+        accounts = discover_accounts(installation)
+        if not accounts:
+            print("  none found")
+            continue
+        account_selection = select_account(accounts)
+        for account in accounts:
+            marker = "*" if account == account_selection.selected else " "
+            label = account.persona_name or account.account_name or "(unknown)"
+            print(f" {marker} {account.account_id32}  {label}")
+            print(f"      account name  {account.account_name or '(unknown)'}")
+            print(f"      steamID64     {account.steam_id64}")
+            print(f"      hints         {account.selection_hints or '(none)'}")
+        print(f"  selection         {account_selection.reason}")
+        print(f"  needs confirmation {account_selection.requires_confirmation}")
+
+    # "*" is a preselection, not a decision. Rules 7 and 8 forbid acting on it
+    # without the user, so say so rather than letting the marker imply consent.
+    print()
+    print("* = preselected. Nothing is chosen until confirmed (rules 7 and 8).")
+    return 0
+
+
 def _print_launch(args: argparse.Namespace) -> int:
     """Show launch vectors for discovered entries, without writing Steam."""
     result = discover_applications()
@@ -273,6 +327,12 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("--all", action="store_true", help="include NoDisplay entries")
     launch.add_argument("--verbose", action="store_true", help="print every vector")
     launch.set_defaults(func=_print_launch)
+
+    steam = debug_commands.add_parser(
+        "steam",
+        help="show Steam installations and accounts (Phase 4); read-only",
+    )
+    steam.set_defaults(func=_print_steam)
 
     return parser
 
