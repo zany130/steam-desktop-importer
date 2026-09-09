@@ -1,7 +1,7 @@
 """PySide6 GUI (IMPLEMENTATION.md §25, Phase 3).
 
-Read-only. The window discovers applications and Steam targets; it does not
-write shortcuts, state, or artwork.
+The window discovers applications and Steam targets and writes only the
+Phase 5 SQLite store. It does not write shortcuts or artwork.
 """
 
 from __future__ import annotations

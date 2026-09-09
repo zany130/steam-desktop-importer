@@ -9,9 +9,15 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from steam_desktop_importer.models import DesktopApplication, UnsupportedCode
+from steam_desktop_importer.state import (
+    STATUS_CHANGED,
+    STATUS_IMPORTED,
+    STATUS_NEW,
+    STATUS_POSSIBLE_MATCH,
+    STATUS_UNSCOPED,
+)
 from steam_desktop_importer.ui.main_window import current_desktops
 from steam_desktop_importer.ui.models import (
-    IMPORT_STATUS_UNKNOWN,
     ApplicationFilterProxy,
     ApplicationTableModel,
     Column,
@@ -83,11 +89,30 @@ def test_table_has_the_specified_columns(qapp):
     assert headers == ["", "", "Application", "Source", "Command", "Desktop ID", "Status", "In Steam"]
 
 
-def test_import_status_is_unknown_rather_than_new(qapp):
-    """Showing New would claim the capture host has no shortcuts. It has 783."""
+def test_unscoped_rows_do_not_claim_new(qapp):
+    """Without a selected install+account, New would be a guess."""
     model, _proxy = populated(make_app())
     index = model.index(0, Column.IMPORT_STATUS)
-    assert model.data(index, Qt.ItemDataRole.DisplayRole) == IMPORT_STATUS_UNKNOWN
+    assert model.data(index, Qt.ItemDataRole.DisplayRole) == STATUS_UNSCOPED
+
+
+def test_import_status_column_and_filter(qapp):
+    model, proxy = populated(
+        make_app(desktop_id="new.desktop", name="NewApp"),
+        make_app(desktop_id="old.desktop", name="OldApp"),
+    )
+    model.set_import_statuses(
+        {
+            "new.desktop": STATUS_NEW,
+            "old.desktop": STATUS_IMPORTED,
+        }
+    )
+    assert model.index(0, Column.IMPORT_STATUS).data() == STATUS_NEW
+    assert model.index(1, Column.IMPORT_STATUS).data() == STATUS_IMPORTED
+    proxy.set_import_statuses({STATUS_NEW})
+    assert visible_names(proxy) == ["NewApp"]
+    proxy.set_import_statuses({STATUS_CHANGED, STATUS_POSSIBLE_MATCH})
+    assert visible_names(proxy) == []
 
 
 def test_unsupported_rows_cannot_be_ticked(qapp):

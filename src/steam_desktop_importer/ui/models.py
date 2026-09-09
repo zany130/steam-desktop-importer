@@ -5,15 +5,12 @@ IMPLEMENTATION.md §25.1 and §25.3. A real ``QAbstractTableModel`` behind a
 the capture host resolves 804 entries, and per-cell widgets at that size make
 filtering and sorting noticeably slow.
 
-Two things are deliberately *not* faked here:
-
-* **Import status.** §25.1's ``New``/``Imported``/``Changed``/``Possible
-  Existing Match`` all require the Phase 5 state store and the Phase 6 VDF
-  reader. Until those exist the column reports ``unknown``. Showing ``New``
-  would actively mislead: the capture host already has 783 shortcuts, so
-  "nothing is imported yet" is a false statement, not a harmless default.
-* **Icons.** Resolved lazily and cached, because theme lookup for 800 entries
-  costs far more than drawing them.
+Import status is a Phase 5 classification against the SQLite store and an
+optional read-only listing of existing ``shortcuts.vdf`` identities.
+``Imported`` means *managed in importer state*, not *verified present in
+the VDF* (that confirmation is Phase 6). Icons are resolved lazily and
+cached, because theme lookup for 800 entries costs far more than drawing
+them.
 """
 
 from __future__ import annotations
@@ -31,18 +28,15 @@ from PySide6.QtGui import QIcon
 from ..desktop.icons import resolve_icon
 from ..launch import LaunchAdapterError, build_launch_vector
 from ..models import DesktopApplication
+from ..state import STATUS_NEW, STATUS_UNSCOPED
 
 __all__ = [
     "COLUMNS",
-    "IMPORT_STATUS_UNKNOWN",
     "ApplicationFilterProxy",
     "ApplicationTableModel",
     "Column",
     "Row",
 ]
-
-IMPORT_STATUS_UNKNOWN = "unknown"
-"""Placeholder until Phases 5 and 6 can compute a real §25.1 import status."""
 
 
 class Column:
@@ -74,6 +68,7 @@ class Row:
 
     app: DesktopApplication
     selected: bool = False
+    import_status: str = STATUS_NEW
 
     _command: str | None = None
     _icon: QIcon | None = None
@@ -153,8 +148,22 @@ class ApplicationTableModel(QAbstractTableModel):
         longer supported.
         """
         self.beginResetModel()
-        self._rows = [Row(app) for app in applications]
+        self._rows = [Row(app, import_status=STATUS_UNSCOPED) for app in applications]
         self.endResetModel()
+
+    def set_import_statuses(self, statuses: dict[str, str]) -> None:
+        """Replace the In Steam column from a desktop-ID → status map."""
+        if not self._rows:
+            return
+        for row in self._rows:
+            row.import_status = statuses.get(row.app.desktop_id, STATUS_UNSCOPED)
+        top = self.index(0, Column.IMPORT_STATUS)
+        bottom = self.index(len(self._rows) - 1, Column.IMPORT_STATUS)
+        self.dataChanged.emit(
+            top,
+            bottom,
+            [Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.UserRole],
+        )
 
     def rows(self) -> list[Row]:
         return self._rows
@@ -238,13 +247,15 @@ class ApplicationTableModel(QAbstractTableModel):
             if column == Column.STATUS:
                 return row.status
             if column == Column.IMPORT_STATUS:
-                return IMPORT_STATUS_UNKNOWN
+                return row.import_status
 
         if role == Qt.ItemDataRole.UserRole:
             if column == Column.SOURCE:
                 return row.app.source_kind
             if column == Column.STATUS:
                 return row.status
+            if column == Column.IMPORT_STATUS:
+                return row.import_status
 
         return None
 
@@ -289,6 +300,7 @@ class ApplicationFilterProxy(QSortFilterProxyModel):
         super().__init__(parent)
         self._search = ""
         self._source_kinds: set[str] | None = None
+        self._import_statuses: set[str] | None = None
         self._show_no_display = False
         self._show_unsupported = True
         self._current_desktop_only = False
@@ -307,6 +319,11 @@ class ApplicationFilterProxy(QSortFilterProxyModel):
 
     def set_source_kinds(self, kinds: set[str] | None) -> None:
         self._source_kinds = kinds
+        self._refresh_filter()
+
+    def set_import_statuses(self, statuses: set[str] | None) -> None:
+        """``None`` shows every status; a set keeps only those values."""
+        self._import_statuses = statuses
         self._refresh_filter()
 
     def set_show_no_display(self, show: bool) -> None:
@@ -340,6 +357,8 @@ class ApplicationFilterProxy(QSortFilterProxyModel):
             return False
         if self._source_kinds is not None and app.source_kind not in self._source_kinds:
             return False
+        if self._import_statuses is not None and row.import_status not in self._import_statuses:
+            return False
 
         if self._search:
             haystack = " ".join(
@@ -350,6 +369,7 @@ class ApplicationFilterProxy(QSortFilterProxyModel):
                     app.source_kind,
                     row.command,
                     row.status,
+                    row.import_status,
                 )
             ).lower()
             if self._search not in haystack:

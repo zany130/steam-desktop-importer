@@ -273,14 +273,24 @@ def _write_calls(tree: ast.AST) -> list[str]:
     return found
 
 
+# Phase 5 may create the importer state directory. Steam paths stay forbidden.
+# Adding a Steam write requires a new, reviewed allowlist entry — do not
+# broaden this set to land Phase 7 by accident.
+_WRITE_ALLOWED = {
+    "state/store.py": {"mkdir"},
+}
+
+
 @pytest.mark.parametrize("module", sorted(SRC.rglob("*.py")), ids=lambda p: p.name)
 def test_package_performs_no_filesystem_writes(module):
     """Phase 7: "Do not enable live writes until this phase passes."
 
-    Phases 0 and 1 are read-only by design. This test is expected to be
-    relaxed with an explicit allowlist when the Phase 7 transaction lands, and
-    that relaxation should be a deliberate, reviewed change rather than
-    something that happens by accident.
+    The only allowed write is ``Path.mkdir`` for the Phase 5 state directory.
+    Nothing may write to a Steam path. Relaxing this further for the Phase 7
+    VDF transaction must be a deliberate, reviewed change.
     """
     tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
-    assert _write_calls(tree) == [], f"{module.name} performs filesystem writes"
+    found = _write_calls(tree)
+    allowed = _WRITE_ALLOWED.get(str(module.relative_to(SRC)), set())
+    unexpected = [name for name in found if name not in allowed]
+    assert unexpected == [], f"{module.name} performs filesystem writes: {unexpected}"

@@ -1,7 +1,8 @@
-"""Main window (IMPLEMENTATION.md §25, Phase 3).
+"""Main window (IMPLEMENTATION.md §25, Phases 3–5).
 
-Read-only. The Import button is visible and disabled on purpose: selection
-and status have to be exercisable, but nothing here writes to Steam.
+The Import button is visible and disabled on purpose: selection and status
+have to be exercisable, but nothing here writes to Steam. The Phase 5
+SQLite store is written; ``shortcuts.vdf`` is only opened ``rb``.
 """
 
 from __future__ import annotations
@@ -32,7 +33,24 @@ from PySide6.QtWidgets import (
 
 from ..desktop.discovery import DiscoveryResult
 from ..models import SOURCE_KINDS, SteamAccount, SteamInstallation, UnsupportedCode
-from ..steam import select_account, select_installation
+from ..state import (
+    STATUS_CHANGED,
+    STATUS_IMPORTED,
+    STATUS_NEW,
+    STATUS_POSSIBLE_MATCH,
+    StateStore,
+    classify_applications,
+    current_exec,
+    current_name,
+    default_state_path,
+)
+from ..steam import (
+    first_import_candidate,
+    list_existing_shortcuts,
+    select_account,
+    select_installation,
+    shortcuts_vdf_path,
+)
 from ..steam.running import SteamRunningStatus
 from .account_dialog import AccountDialog
 from .delegates import source_badge_delegate, status_badge_delegate
@@ -53,6 +71,13 @@ _PLACEHOLDER_ACCOUNT = "Select a Steam account…"
 _IMPORT_DISABLED = (
     "Importing is not implemented yet. Safe writes to shortcuts.vdf are Phase 7."
 )
+_IMPORT_FILTER_ALL = "All import statuses"
+_IMPORT_FILTER_STATUSES = (
+    STATUS_NEW,
+    STATUS_IMPORTED,
+    STATUS_CHANGED,
+    STATUS_POSSIBLE_MATCH,
+)
 
 
 def current_desktops(environ: dict[str, str] | None = None) -> set[str]:
@@ -63,17 +88,33 @@ def current_desktops(environ: dict[str, str] | None = None) -> set[str]:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, parent=None, *, auto_refresh: bool = True) -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        auto_refresh: bool = True,
+        state_store: StateStore | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Steam Desktop Importer")
         self.resize(1280, 800)
 
         self._pool = QThreadPool.globalInstance()
-        self._acknowledged: set[str] = set()
+        self._store_fallback = False
+        if state_store is not None:
+            self._store = state_store
+        else:
+            try:
+                self._store = StateStore(default_state_path())
+            except OSError:
+                self._store = StateStore(":memory:")
+                self._store_fallback = True
+        self._acknowledged: set[str] = set(self._store.acknowledged_collisions())
         self._installations: list[tuple[SteamInstallation, list[SteamAccount]]] = []
         self._selected_installation: SteamInstallation | None = None
         self._selected_account: SteamAccount | None = None
         self._running: SteamRunningStatus | None = None
+        self._shortcuts_error: str | None = None
         self._scan_busy = False
         self._steam_busy = False
         self._account_prompted = False
@@ -160,12 +201,13 @@ class MainWindow(QMainWindow):
         self.show_unsupported = QCheckBox("Show unsupported")
         self.current_desktop_only = QCheckBox("Current desktop only")
         self.imported_filter = QComboBox()
-        self.imported_filter.addItems(["Imported status: unavailable until Phase 5"])
-        self.imported_filter.setEnabled(False)
+        self.imported_filter.addItem(_IMPORT_FILTER_ALL, None)
+        for status in _IMPORT_FILTER_STATUSES:
+            self.imported_filter.addItem(status, status)
         self.imported_filter.setToolTip(
-            "New / Imported / Changed / Possible Existing Match need the "
-            "Phase 5 state store and the Phase 6 VDF reader. The column shows "
-            "'unknown' until then, so this filter would be a lie."
+            "Filter by §25.1 import status for the selected installation "
+            "and account. Imported means managed in importer state, not "
+            "verified in shortcuts.vdf."
         )
         filter_row.addWidget(self.show_no_display)
         filter_row.addWidget(self.show_unsupported)
@@ -201,6 +243,9 @@ class MainWindow(QMainWindow):
         self.table.setColumnWidth(Column.DESKTOP_ID, 220)
         self.table.setItemDelegateForColumn(Column.SOURCE, source_badge_delegate(self.table))
         self.table.setItemDelegateForColumn(Column.STATUS, status_badge_delegate(self.table))
+        self.table.setItemDelegateForColumn(
+            Column.IMPORT_STATUS, status_badge_delegate(self.table)
+        )
         self.table.sortByColumn(Column.NAME, Qt.SortOrder.AscendingOrder)
 
         self.detail = QTextEdit()
@@ -210,8 +255,8 @@ class MainWindow(QMainWindow):
         self.acknowledge = QPushButton("Acknowledge desktop-ID collision")
         self.acknowledge.setEnabled(False)
         self.acknowledge.setToolTip(
-            "Lift the import block for this colliding desktop ID for the rest "
-            "of the session. Persistent acknowledgement is Phase 5."
+            "Lift the import block for this colliding desktop ID and remember "
+            "that acknowledgement in the importer state store."
         )
 
         self.import_button = QPushButton("Import selected")
@@ -260,6 +305,7 @@ class MainWindow(QMainWindow):
     def _wire(self) -> None:
         self.search.textChanged.connect(self._proxy.set_search)
         self.source_filter.currentIndexChanged.connect(self._on_source_filter)
+        self.imported_filter.currentIndexChanged.connect(self._on_import_filter)
         self.show_no_display.toggled.connect(self._proxy.set_show_no_display)
         self.show_unsupported.toggled.connect(self._proxy.set_show_unsupported)
         self.current_desktop_only.toggled.connect(self._on_current_desktop)
@@ -316,6 +362,7 @@ class MainWindow(QMainWindow):
             return
         apps = list(result.applications.values())
         self._model.set_applications(apps)
+        self._refresh_import_statuses()
         self._proxy.invalidate()
         self._update_counts()
         collisions = len(result.collisions)
@@ -350,7 +397,10 @@ class MainWindow(QMainWindow):
 
     def _fill_installations(self) -> None:
         installations = [item[0] for item in self._installations]
-        selection = select_installation(installations)
+        selection = select_installation(
+            installations,
+            remembered_key=self._store.remembered_installation(),
+        )
         previous = self.install_combo.blockSignals(True)
         self.install_combo.clear()
         if not installations:
@@ -381,8 +431,11 @@ class MainWindow(QMainWindow):
         key = self.install_combo.currentData()
         pair = next((item for item in self._installations if item[0].key == key), None)
         self._selected_installation = pair[0] if pair else None
+        if self._selected_installation is not None:
+            self._store.remember_installation(self._selected_installation.key)
         self._fill_accounts(pair[1] if pair else None)
         self._update_banner()
+        self._refresh_import_statuses()
 
     def _fill_accounts(self, accounts: list[SteamAccount] | None) -> None:
         previous = self.account_combo.blockSignals(True)
@@ -397,9 +450,15 @@ class MainWindow(QMainWindow):
             self.account_combo.setEnabled(False)
             self._selected_account = None
             self.account_combo.blockSignals(previous)
+            self._refresh_import_statuses()
             return
         self.account_combo.setEnabled(True)
-        selection = select_account(accounts)
+        remembered = (
+            self._store.remembered_account(self._selected_installation.key)
+            if self._selected_installation is not None
+            else None
+        )
+        selection = select_account(accounts, remembered_account_id32=remembered)
         if selection.requires_confirmation:
             self.account_combo.addItem(_PLACEHOLDER_ACCOUNT, None)
         for account in selection.accounts:
@@ -433,6 +492,7 @@ class MainWindow(QMainWindow):
         account_id32 = self.account_combo.currentData()
         self._selected_account = None
         if self._selected_installation is None or account_id32 is None:
+            self._refresh_import_statuses()
             return
         for installation, accounts in self._installations:
             if installation.key != self._selected_installation.key:
@@ -440,7 +500,12 @@ class MainWindow(QMainWindow):
             for account in accounts:
                 if account.account_id32 == account_id32:
                     self._selected_account = account
+                    self._store.remember_account(
+                        self._selected_installation.key, account.account_id32
+                    )
+                    self._refresh_import_statuses()
                     return
+        self._refresh_import_statuses()
 
     def _set_steam_status(self, status: SteamRunningStatus) -> None:
         if status.running:
@@ -480,6 +545,16 @@ class MainWindow(QMainWindow):
                 "Several Steam accounts were found. Choose one; timestamps are "
                 "hints, not a decision."
             )
+        if self._store_fallback:
+            messages.append(
+                "Could not create the importer state directory; this session "
+                "is using an in-memory store and will be forgotten on exit."
+            )
+        if self._shortcuts_error:
+            messages.append(
+                "Existing shortcuts.vdf could not be parsed, so Possible "
+                f"Existing Match and AppID occupancy are incomplete. {self._shortcuts_error}"
+            )
         self.banner.setVisible(bool(messages))
         self.banner.setText(" ".join(messages))
 
@@ -488,6 +563,10 @@ class MainWindow(QMainWindow):
     def _on_source_filter(self) -> None:
         kind = self.source_filter.currentData()
         self._proxy.set_source_kinds(None if kind is None else {kind})
+
+    def _on_import_filter(self) -> None:
+        status = self.imported_filter.currentData()
+        self._proxy.set_import_statuses(None if status is None else {status})
 
     def _on_current_desktop(self, checked: bool) -> None:
         self._proxy.set_current_desktop_only(checked, current_desktops())
@@ -540,7 +619,23 @@ class MainWindow(QMainWindow):
             lines.append(f"Steam install: {self._selected_installation.root}")
         if self._selected_account:
             lines.append(f"Steam account: {account_label(self._selected_account)}")
-        lines.append("In Steam: unknown (needs Phase 5 state and Phase 6 VDF).")
+        lines.append(f"In Steam: {row.import_status}")
+        mapping = None
+        if self._selected_installation is not None and self._selected_account is not None:
+            mapping = self._store.get_mapping(
+                self._selected_installation.key,
+                self._selected_account.account_id32,
+                app.desktop_id,
+            )
+        if mapping is not None:
+            lines.append(f"persisted AppID: {mapping.steam_appid_unsigned}")
+        else:
+            lines.append(
+                f"first-import candidate: {first_import_candidate(app.desktop_id)} "
+                "(not persisted)"
+            )
+        lines.append(f"current Name: {current_name(app)}")
+        lines.append(f"current Exec: {current_exec(app)}")
         self.detail.setPlainText("\n".join(lines))
         self.acknowledge.setEnabled(
             app.unsupported_code == UnsupportedCode.DESKTOP_ID_COLLISION
@@ -554,6 +649,7 @@ class MainWindow(QMainWindow):
         app = self._model.row_at(source.row()).app
         if app.unsupported_code != UnsupportedCode.DESKTOP_ID_COLLISION:
             return
+        self._store.acknowledge_collision(app.desktop_id)
         self._acknowledged.add(app.desktop_id)
         self._start_scan()
 
@@ -570,8 +666,38 @@ class MainWindow(QMainWindow):
         )
         self._update_selection_count()
 
+    def _existing_shortcuts(self):
+        self._shortcuts_error = None
+        if self._selected_account is None:
+            return []
+        path = shortcuts_vdf_path(self._selected_account)
+        try:
+            return list_existing_shortcuts(path)
+        except ValueError as error:
+            self._shortcuts_error = str(error)
+            return []
+
+    def _refresh_import_statuses(self) -> None:
+        existing = self._existing_shortcuts()
+        statuses = classify_applications(
+            [row.app for row in self._model.rows()],
+            self._store,
+            self._selected_installation.key if self._selected_installation else None,
+            self._selected_account.account_id32 if self._selected_account else None,
+            existing,
+        )
+        self._model.set_import_statuses(statuses)
+        self._update_banner()
+        current = self.table.currentIndex()
+        if current.isValid():
+            self._on_row_changed(current, current)
+
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
+
+    def closeEvent(self, event) -> None:
+        self._store.close()
+        super().closeEvent(event)
 
 
 def run_app() -> int:

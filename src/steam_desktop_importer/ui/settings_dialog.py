@@ -1,8 +1,8 @@
 """Settings dialog.
 
-Phase 3 needs a settings control. Persistent settings, SteamGridDB auth, and
-remembered Steam choices all belong to later phases, so this dialog is
-deliberately informational. It must not pretend those features exist.
+SteamGridDB auth and other later-phase settings do not exist yet, so this
+dialog stays informational. Chosen Steam installation and account are
+remembered in the Phase 5 SQLite store, not here.
 """
 
 from __future__ import annotations
@@ -13,8 +13,8 @@ from PySide6.QtWidgets import QDialog, QDialogButtonBox, QLabel, QVBoxLayout
 __all__ = ["SettingsDialog"]
 
 _BODY = """<h3>Settings</h3>
-<p>Nothing here is persisted yet. The SQLite store that will remember a
-chosen Steam installation and account is Phase 5 work.</p>
+<p>Nothing here is persisted. Chosen Steam installation and account are
+remembered in the SQLite store, not in this dialog.</p>
 <p><b>Current policy</b></p>
 <ul>
 <li>Native Steam is the MVP target.</li>

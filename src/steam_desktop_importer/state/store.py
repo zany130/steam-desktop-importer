@@ -1,0 +1,325 @@
+"""SQLite persistent importer state (IMPLEMENTATION.md §6, Phase 5).
+
+Writes only to ``$XDG_STATE_HOME/steam-desktop-importer/state.sqlite3``.
+This module must never open a Steam path for writing.
+
+Logical identity is ``(steam_installation_key, steam_account_id32,
+desktop_id)``. The persisted unsigned AppID is authoritative for a row that
+already exists; ``Name=`` / ``Exec=`` updates change ``last_known_*`` and
+``updated_at`` only.
+
+§27 says the VDF commit happens *before* the state commit. This store
+therefore does not allocate-and-insert in one step: callers persist a mapping
+only when they mean to. Phase 7 will insert after a successful VDF write.
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+__all__ = [
+    "ManagedMapping",
+    "StateStore",
+    "default_state_path",
+    "xdg_state_home",
+]
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS mappings (
+    steam_installation_key TEXT NOT NULL,
+    steam_account_id32 INTEGER NOT NULL,
+    desktop_id TEXT NOT NULL,
+    steam_appid_unsigned INTEGER NOT NULL,
+    last_known_name TEXT,
+    last_known_exec TEXT,
+    desktop_path TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (steam_installation_key, steam_account_id32, desktop_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS mappings_appid_unique
+    ON mappings (steam_installation_key, steam_account_id32, steam_appid_unsigned);
+
+CREATE TABLE IF NOT EXISTS remembered_installation (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    steam_installation_key TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS remembered_accounts (
+    steam_installation_key TEXT PRIMARY KEY,
+    steam_account_id32 INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS acknowledged_collisions (
+    desktop_id TEXT PRIMARY KEY,
+    acknowledged_at TEXT NOT NULL
+);
+"""
+
+
+def xdg_state_home(environ: dict[str, str] | None = None, home: Path | None = None) -> Path:
+    """``$XDG_STATE_HOME``, defaulting to ``~/.local/state``.
+
+    A relative value is invalid and falls back to the default, matching the
+    XDG data-home rule already used for discovery.
+    """
+    env = os.environ if environ is None else environ
+    base = home if home is not None else Path.home()
+    value = env.get("XDG_STATE_HOME")
+    if value:
+        candidate = Path(value)
+        if candidate.is_absolute():
+            return candidate
+    return base / ".local" / "state"
+
+
+def default_state_path(environ: dict[str, str] | None = None, home: Path | None = None) -> Path:
+    return xdg_state_home(environ, home) / "steam-desktop-importer" / "state.sqlite3"
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+@dataclass(frozen=True)
+class ManagedMapping:
+    """One §6 row."""
+
+    steam_installation_key: str
+    steam_account_id32: int
+    desktop_id: str
+    steam_appid_unsigned: int
+    last_known_name: str | None
+    last_known_exec: str | None
+    desktop_path: str | None
+    created_at: str
+    updated_at: str
+
+
+def _row_to_mapping(row: sqlite3.Row) -> ManagedMapping:
+    return ManagedMapping(
+        steam_installation_key=row["steam_installation_key"],
+        steam_account_id32=row["steam_account_id32"],
+        desktop_id=row["desktop_id"],
+        steam_appid_unsigned=row["steam_appid_unsigned"],
+        last_known_name=row["last_known_name"],
+        last_known_exec=row["last_known_exec"],
+        desktop_path=row["desktop_path"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+class StateStore:
+    """SQLite-backed importer state."""
+
+    def __init__(self, path: Path | str, *, create: bool = True) -> None:
+        """Open a store.
+
+        ``create=True`` (the GUI default) makes the state directory and file.
+        ``create=False`` is for inspection: an existing file is opened, a
+        missing file becomes an empty in-memory store so debug commands and
+        characterization cannot create ``state.sqlite3`` as a side effect.
+        """
+        self.path = Path(path) if path != ":memory:" else Path(":memory:")
+        self._memory = path == ":memory:"
+        if self._memory:
+            self._connection = sqlite3.connect(":memory:")
+        elif create:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._connection = sqlite3.connect(self.path)
+        elif self.path.is_file():
+            self._connection = sqlite3.connect(self.path)
+        else:
+            self._memory = True
+            self.path = Path(":memory:")
+            self._connection = sqlite3.connect(":memory:")
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA foreign_keys = ON")
+        self._connection.executescript(_SCHEMA)
+        self._connection.commit()
+
+    def close(self) -> None:
+        self._connection.close()
+
+    def __enter__(self) -> StateStore:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+    # -- mappings -------------------------------------------------------
+
+    def get_mapping(
+        self,
+        steam_installation_key: str,
+        steam_account_id32: int,
+        desktop_id: str,
+    ) -> ManagedMapping | None:
+        row = self._connection.execute(
+            """
+            SELECT * FROM mappings
+            WHERE steam_installation_key = ?
+              AND steam_account_id32 = ?
+              AND desktop_id = ?
+            """,
+            (steam_installation_key, steam_account_id32, desktop_id),
+        ).fetchone()
+        return _row_to_mapping(row) if row else None
+
+    def list_mappings(
+        self,
+        steam_installation_key: str,
+        steam_account_id32: int,
+    ) -> list[ManagedMapping]:
+        rows = self._connection.execute(
+            """
+            SELECT * FROM mappings
+            WHERE steam_installation_key = ? AND steam_account_id32 = ?
+            ORDER BY desktop_id
+            """,
+            (steam_installation_key, steam_account_id32),
+        ).fetchall()
+        return [_row_to_mapping(row) for row in rows]
+
+    def occupied_appids(
+        self,
+        steam_installation_key: str,
+        steam_account_id32: int,
+    ) -> set[int]:
+        rows = self._connection.execute(
+            """
+            SELECT steam_appid_unsigned FROM mappings
+            WHERE steam_installation_key = ? AND steam_account_id32 = ?
+            """,
+            (steam_installation_key, steam_account_id32),
+        ).fetchall()
+        return {int(row["steam_appid_unsigned"]) for row in rows}
+
+    def save_mapping(
+        self,
+        steam_installation_key: str,
+        steam_account_id32: int,
+        desktop_id: str,
+        steam_appid_unsigned: int,
+        last_known_name: str | None,
+        last_known_exec: str | None,
+        desktop_path: str | Path | None,
+    ) -> ManagedMapping:
+        """Insert or update a mapping.
+
+        If the identity already exists the AppID is **kept**, even if the
+        caller passed a different one. That is the §6 / §16 rule: Name and
+        Exec may change; the AppID does not.
+        """
+        existing = self.get_mapping(steam_installation_key, steam_account_id32, desktop_id)
+        now = _now()
+        path_text = str(desktop_path) if desktop_path is not None else None
+        appid = existing.steam_appid_unsigned if existing is not None else steam_appid_unsigned
+        created = existing.created_at if existing is not None else now
+        self._connection.execute(
+            """
+            INSERT INTO mappings (
+                steam_installation_key, steam_account_id32, desktop_id,
+                steam_appid_unsigned, last_known_name, last_known_exec,
+                desktop_path, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (steam_installation_key, steam_account_id32, desktop_id)
+            DO UPDATE SET
+                last_known_name = excluded.last_known_name,
+                last_known_exec = excluded.last_known_exec,
+                desktop_path = excluded.desktop_path,
+                updated_at = excluded.updated_at
+            """,
+            (
+                steam_installation_key,
+                steam_account_id32,
+                desktop_id,
+                appid,
+                last_known_name,
+                last_known_exec,
+                path_text,
+                created,
+                now,
+            ),
+        )
+        self._connection.commit()
+        mapping = self.get_mapping(steam_installation_key, steam_account_id32, desktop_id)
+        assert mapping is not None
+        return mapping
+
+    # -- remembered install / account -----------------------------------
+
+    def remember_installation(self, steam_installation_key: str) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO remembered_installation (id, steam_installation_key, updated_at)
+            VALUES (1, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                steam_installation_key = excluded.steam_installation_key,
+                updated_at = excluded.updated_at
+            """,
+            (steam_installation_key, _now()),
+        )
+        self._connection.commit()
+
+    def remembered_installation(self) -> str | None:
+        row = self._connection.execute(
+            "SELECT steam_installation_key FROM remembered_installation WHERE id = 1"
+        ).fetchone()
+        return str(row["steam_installation_key"]) if row else None
+
+    def remember_account(self, steam_installation_key: str, steam_account_id32: int) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO remembered_accounts (
+                steam_installation_key, steam_account_id32, updated_at
+            ) VALUES (?, ?, ?)
+            ON CONFLICT (steam_installation_key) DO UPDATE SET
+                steam_account_id32 = excluded.steam_account_id32,
+                updated_at = excluded.updated_at
+            """,
+            (steam_installation_key, steam_account_id32, _now()),
+        )
+        self._connection.commit()
+
+    def remembered_account(self, steam_installation_key: str) -> int | None:
+        row = self._connection.execute(
+            """
+            SELECT steam_account_id32 FROM remembered_accounts
+            WHERE steam_installation_key = ?
+            """,
+            (steam_installation_key,),
+        ).fetchone()
+        return int(row["steam_account_id32"]) if row else None
+
+    # -- collision acknowledgements -------------------------------------
+
+    def acknowledge_collision(self, desktop_id: str) -> None:
+        """Remember a desktop-ID collision acknowledgement.
+
+        Scoped to the desktop ID, not to an installation or account: the
+        collision is a property of the host filesystem. Import identity
+        remains ``(installation, account, desktop_id)``.
+        """
+        self._connection.execute(
+            """
+            INSERT INTO acknowledged_collisions (desktop_id, acknowledged_at)
+            VALUES (?, ?)
+            ON CONFLICT (desktop_id) DO UPDATE SET
+                acknowledged_at = excluded.acknowledged_at
+            """,
+            (desktop_id, _now()),
+        )
+        self._connection.commit()
+
+    def acknowledged_collisions(self) -> frozenset[str]:
+        rows = self._connection.execute("SELECT desktop_id FROM acknowledged_collisions").fetchall()
+        return frozenset(str(row["desktop_id"]) for row in rows)

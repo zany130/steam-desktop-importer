@@ -19,7 +19,11 @@ _STATUS_COLORS = {
     "Hidden": "#6d6d6d",
     "Unavailable": "#c05621",
     "Unsupported": "#b3261e",
-    "unknown": "#6d6d6d",
+    "New": "#3d6ea8",
+    "Imported": "#2e7d32",
+    "Changed": "#c05621",
+    "Possible Existing Match": "#6a1b9a",
+    "select Steam": "#6d6d6d",
 }
 
 

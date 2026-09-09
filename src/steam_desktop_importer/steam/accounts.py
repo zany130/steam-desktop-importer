@@ -200,7 +200,7 @@ def select_account(
         accounts: Candidates from :func:`discover_accounts`.
         remembered_account_id32: A previously confirmed account for this
             installation. §13 asks for the choice to be persisted per
-            installation; storing it is Phase 5, honouring it is here.
+            installation; the Phase 5 store writes it, this only honours it.
     """
     if not accounts:
         return AccountSelection((), None, False, "no Steam accounts found")
