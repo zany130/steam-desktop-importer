@@ -1,0 +1,357 @@
+"""Phase 8 SteamGridDB client: search, assets, retries, download validation."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+import requests
+
+from steam_desktop_importer.steamgriddb import (
+    ENV_KEY,
+    AuthenticationError,
+    GameResult,
+    InvalidResponseError,
+    MissingAPIKeyError,
+    NotFoundError,
+    RateLimitError,
+    SteamGridDBClient,
+    SteamGridDBTimeoutError,
+    clear_stored_api_key,
+    default_key_path,
+    resolve_api_key,
+    save_api_key,
+    search_queries,
+    sniff_image,
+)
+from steam_desktop_importer.steamgriddb.download import download_url
+
+PNG_1X1 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+)
+WEBP_HEADER = b"RIFF" + (12).to_bytes(4, "little") + b"WEBP" + b"\x00" * 4
+
+
+class FakeResponse:
+    def __init__(
+        self,
+        status: int,
+        json_body: object | None = None,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        url: str = "https://www.steamgriddb.com/api/v2/search/autocomplete/Kate",
+    ) -> None:
+        self.status_code = status
+        self._json = json_body
+        if content is not None:
+            self.content = content
+        elif json_body is not None:
+            self.content = json.dumps(json_body).encode("utf-8")
+        else:
+            self.content = b""
+        self.headers = headers or {}
+        self.url = url
+
+    def json(self):
+        if self._json is None:
+            raise ValueError("not json")
+        return self._json
+
+    def close(self) -> None:
+        return None
+
+    def iter_content(self, chunk_size: int = 1):
+        yield self.content
+
+
+class ScriptedSession:
+    def __init__(self, script: list[object]) -> None:
+        self.script = list(script)
+        self.headers: dict[str, str] = {}
+        self.calls: list[tuple[str, str]] = []
+        self.sent_headers: list[dict[str, str]] = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url))
+        self.sent_headers.append(dict(kwargs.get("headers") or {}))
+        item = self.script.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def prepare_request(self, request: requests.Request):
+        prepared = requests.Session()
+        prepared.headers.update(self.headers)
+        return prepared.prepare_request(request)
+
+    def send(self, prepared, **kwargs):
+        self.sent_headers.append(dict(prepared.headers))
+        return self.request(prepared.method or "GET", prepared.url)
+
+    def close(self) -> None:
+        return None
+
+
+def _client(script: list[object], **kwargs) -> SteamGridDBClient:
+    session = ScriptedSession(script)
+    client = SteamGridDBClient("test-secret-key", session=session, sleeper=lambda _delay: None, **kwargs)
+    return client
+
+
+def test_search_returns_games():
+    client = _client(
+        [
+            FakeResponse(
+                200,
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": 2254,
+                            "name": "Half-Life 2",
+                            "types": ["steam"],
+                            "verified": True,
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+    games = client.search_games("Half-Life 2")
+    assert games == [
+        GameResult(id=2254, name="Half-Life 2", types=("steam",), verified=True)
+    ]
+    assert "Half-Life%202" in client.session.calls[0][1]
+    assert client.session.headers["Authorization"] == "Bearer test-secret-key"
+
+
+def test_search_no_results_is_empty_not_an_error():
+    client = _client([FakeResponse(200, {"success": True, "data": []})])
+    assert client.search_games("zzzz-no-such-game") == []
+
+
+def test_search_encodes_the_path_segment():
+    client = _client([FakeResponse(200, {"success": True, "data": []})])
+    client.search_games("Kate & Konsole")
+    assert "Kate%20%26%20Konsole" in client.session.calls[0][1]
+
+
+def test_401_is_authentication_error():
+    client = _client([FakeResponse(401, {"success": False, "errors": ["Unauthorized"]})])
+    with pytest.raises(AuthenticationError) as caught:
+        client.search_games("Kate")
+    assert "test-secret-key" not in str(caught.value)
+    assert caught.value.status_code == 401
+
+
+def test_404_is_not_found():
+    client = _client([FakeResponse(404, {"success": False, "errors": ["Game not found."]})])
+    with pytest.raises(NotFoundError, match="Game not found"):
+        client.get_grids(0)
+
+
+def test_429_retries_then_succeeds():
+    slept: list[float] = []
+    session = ScriptedSession(
+        [
+            FakeResponse(429, {"success": False, "errors": ["Slow down"]}, headers={"Retry-After": "0"}),
+            FakeResponse(200, {"success": True, "data": []}),
+        ]
+    )
+    client = SteamGridDBClient(
+        "test-secret-key",
+        session=session,
+        sleeper=slept.append,
+    )
+    assert client.search_games("Kate") == []
+    assert slept == [0.0]
+    assert len(session.calls) == 2
+
+
+def test_429_exhausted_raises_rate_limit():
+    session = ScriptedSession(
+        [FakeResponse(429, {}, headers={"Retry-After": "0"})] * 4
+    )
+    client = SteamGridDBClient("k", session=session, sleeper=lambda _delay: None, max_retries=3)
+    with pytest.raises(RateLimitError):
+        client.search_games("Kate")
+    assert len(session.calls) == 4
+
+
+def test_timeout_is_retried_then_raised():
+    session = ScriptedSession(
+        [requests.Timeout("read timed out"), requests.Timeout("read timed out")]
+    )
+    client = SteamGridDBClient(
+        "k", session=session, sleeper=lambda _delay: None, max_retries=1
+    )
+    with pytest.raises(SteamGridDBTimeoutError):
+        client.search_games("Kate")
+
+
+def test_grids_heroes_logos_icons(monkeypatch):
+    assets = {
+        "success": True,
+        "data": [
+            {
+                "id": 80,
+                "score": 1,
+                "style": "alternate",
+                "url": "https://cdn.example/grid.png",
+                "thumb": "https://cdn.example/thumb.png",
+                "width": 600,
+                "height": 900,
+                "author": {"name": "Artist"},
+            }
+        ],
+    }
+    client = _client([FakeResponse(200, assets)] * 4)
+    grids = client.get_grids(2254, dimensions=["600x900"])
+    heroes = client.get_heroes(2254)
+    logos = client.get_logos(2254)
+    icons = client.get_icons(2254)
+    assert [item.kind for item in (grids[0], heroes[0], logos[0], icons[0])] == [
+        "grid",
+        "hero",
+        "logo",
+        "icon",
+    ]
+    recorded = {}
+
+    def capture(method, url, **kwargs):
+        recorded["params"] = kwargs.get("params")
+        return FakeResponse(200, {"success": True, "data": []})
+
+    client.session.request = capture
+    client.get_grids(1, dimensions=["600x900", "342x482"], styles=["material"])
+    assert recorded["params"]["dimensions"] == "600x900,342x482"
+    assert recorded["params"]["styles"] == "material"
+
+
+def test_invalid_asset_url_is_dropped():
+    client = _client(
+        [
+            FakeResponse(
+                200,
+                {
+                    "success": True,
+                    "data": [
+                        {"id": 1, "url": "javascript:alert(1)"},
+                        {"id": 2, "url": "https://cdn.example/ok.png"},
+                    ],
+                },
+            )
+        ]
+    )
+    assets = client.get_grids(1)
+    assert [asset.id for asset in assets] == [2]
+
+
+def test_identical_gets_are_cached():
+    client = _client(
+        [
+            FakeResponse(
+                200,
+                {"success": True, "data": [{"id": 1, "name": "Kate", "types": [], "verified": True}]},
+            )
+        ]
+    )
+    first = client.search_games("Kate")
+    second = client.search_games("Kate")
+    assert first == second
+    assert len(client.session.calls) == 1
+
+
+def test_missing_api_key_raises(tmp_path):
+    environ = {"XDG_CONFIG_HOME": str(tmp_path / "config")}
+    with pytest.raises(MissingAPIKeyError):
+        SteamGridDBClient(environ=environ)
+
+
+def test_resolve_prefers_env_over_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    save_api_key("from-file", environ={"XDG_CONFIG_HOME": str(tmp_path / "config")})
+    resolved = resolve_api_key(
+        environ={"XDG_CONFIG_HOME": str(tmp_path / "config"), ENV_KEY: "from-env"}
+    )
+    assert resolved == "from-env"
+
+
+def test_save_api_key_is_mode_600(tmp_path):
+    environ = {"XDG_CONFIG_HOME": str(tmp_path / "config")}
+    path = save_api_key("stored-secret", environ=environ)
+    assert path == default_key_path(environ)
+    assert path.read_text(encoding="utf-8").strip() == "stored-secret"
+    assert (path.stat().st_mode & 0o777) == 0o600
+    clear_stored_api_key(environ=environ)
+    assert not path.exists()
+
+
+def test_search_queries_keep_the_original_first():
+    assert search_queries("Zoom (Flatpak)") == ("Zoom (Flatpak)", "Zoom")
+    assert search_queries("Kate") == ("Kate",)
+
+
+def test_sniff_image_accepts_png_jpeg_gif_webp():
+    assert sniff_image(PNG_1X1) == "png"
+    assert sniff_image(b"\xff\xd8\xff\xe0") == "jpeg"
+    assert sniff_image(b"GIF89a....") == "gif"
+    assert sniff_image(WEBP_HEADER) == "webp"
+    assert sniff_image(b"<!DOCTYPE html>") is None
+
+
+def test_download_png_to_temp(tmp_path):
+    session = ScriptedSession(
+        [FakeResponse(200, json_body=None, content=PNG_1X1, url="https://cdn.example/a.png")]
+    )
+    session.headers["Authorization"] = "Bearer test-secret-key"
+    dest = tmp_path / "art.png"
+    result = download_url("https://cdn.example/a.png", dest, session=session)
+    assert result.read_bytes() == PNG_1X1
+    auth = session.sent_headers[-1].get("Authorization")
+    assert not auth
+
+
+def test_download_rejects_html(tmp_path):
+    session = ScriptedSession(
+        [
+            FakeResponse(
+                200,
+                json_body=None,
+                content=b"<!DOCTYPE html><html>nope</html>",
+                url="https://cdn.example/nope",
+            )
+        ]
+    )
+    dest = tmp_path / "art.png"
+    with pytest.raises(InvalidResponseError, match="not a recognised image"):
+        download_url("https://cdn.example/nope", dest, session=session)
+    assert not dest.exists()
+    assert not (tmp_path / "art.png.part").exists()
+
+
+def test_download_accepts_webp_with_png_name(tmp_path):
+    session = ScriptedSession(
+        [FakeResponse(200, json_body=None, content=WEBP_HEADER, url="https://cdn.example/a.png")]
+    )
+    dest = tmp_path / "123p.png"
+    download_url("https://cdn.example/a.png", dest, session=session)
+    assert dest.read_bytes() == WEBP_HEADER
+
+
+def test_download_timeout(tmp_path):
+    session = ScriptedSession([requests.Timeout("read timed out")])
+    with pytest.raises(SteamGridDBTimeoutError):
+        download_url("https://cdn.example/a.png", tmp_path / "a.png", session=session)
+
+
+def test_request_exception_redacts_the_key():
+    session = ScriptedSession([requests.ConnectionError("proxy failed for test-secret-key")])
+    client = SteamGridDBClient("test-secret-key", session=session, sleeper=lambda _delay: None, max_retries=0)
+    with pytest.raises(Exception) as caught:
+        client.search_games("Kate")
+    assert "test-secret-key" not in str(caught.value)

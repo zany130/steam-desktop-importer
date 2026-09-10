@@ -50,13 +50,13 @@ def test_window_constructs_without_scanning(qapp):
     window.close()
 
 
-def test_settings_dialog_does_not_offer_a_steamgriddb_key(qapp):
-    from PySide6.QtWidgets import QLabel
+def test_settings_dialog_has_a_steamgriddb_key_field(qapp):
+    from PySide6.QtWidgets import QLabel, QLineEdit
 
     dialog = SettingsDialog()
     body = "\n".join(widget.text() for widget in dialog.findChildren(QLabel))
-    assert "Nothing here is persisted" in body
-    assert "API-key" in body
+    assert "SteamGridDB" in body
+    assert dialog.key_edit.echoMode() == QLineEdit.EchoMode.Password
     dialog.close()
 
 
@@ -391,6 +391,7 @@ def test_import_selected_commits_vdf_and_state(qapp, tmp_path, monkeypatch):
     window._update_import_actions()
     assert window.import_button.isEnabled() is True
     monkeypatch.setattr(window, "_confirm_write", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(window, "_prepare_import_artwork", lambda *_args, **_kwargs: {})
     window._import_selected()
     vdf = shortcuts_vdf_path(account)
     entry = ShortcutDocument.load(vdf).find_by_appid(first_import_candidate(app.desktop_id))
@@ -399,4 +400,13 @@ def test_import_selected_commits_vdf_and_state(qapp, tmp_path, monkeypatch):
     mapping = store.get_mapping(installation.key, account.account_id32, app.desktop_id)
     assert mapping is not None
     assert window._model.rows()[0].import_status == STATUS_IMPORTED
+    window.close()
+
+
+def test_prepare_artwork_skips_without_a_key(qapp, tmp_path, monkeypatch):
+    monkeypatch.delenv("SGDB_API_KEY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    window = _window()
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    assert window._prepare_import_artwork([app], tmp_path) == {}
     window.close()

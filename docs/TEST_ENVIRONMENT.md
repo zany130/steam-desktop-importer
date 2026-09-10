@@ -62,9 +62,10 @@ The importer must never perform the `flatpak override` itself
 ## Safety rules for anyone using a live environment
 
 1. Live `shortcuts.vdf` writes go only through the Phase 7 transaction
-   (`steam/commit.py`) and require Steam to be closed. Debug commands and
-   capture tooling stay read-only. Do not point tests at this host's real
-   userdata; unit tests use tmp copies.
+   (`steam/commit.py`) and require Steam to be closed. `config/grid/` writes
+   go only through `steam/artwork.py`. Debug commands stay read-only against
+   Steam. Do not point tests at this host's real userdata; unit tests use
+   tmp copies.
 2. Phase 0 capture tooling (`scripts/characterize_shortcuts.py`) is
    read-only by construction.
 3. Before any future live write test: fully exit Steam, and independently
@@ -74,5 +75,7 @@ The importer must never perform the `flatpak override` itself
 
 ## Current status of live writes
 
-**Disabled.** No code path in this repository writes to a Steam directory.
-Phases 0–1 are parser/discovery only.
+Unit tests never point at this host's real userdata. `shortcuts.vdf` writes
+go through `steam/commit.py` and artwork through `steam/artwork.py`, both
+against tmp fixtures in the suite. Phase 10 is the live native visual check
+of portrait/wide/hero/logo/icon (PNG/JPEG/WebP) on a real Steam install.

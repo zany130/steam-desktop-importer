@@ -2,12 +2,12 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0–7 complete. 376 tests passing.**
-Live `shortcuts.vdf` writes exist only in `steam/commit.py`, behind an
-importer lock, Steam-closed probe, same-directory temp, fsync, parse-back,
-backup, and `os.replace`. Tests exercise that path on tmp copies, not the
-host Steam userdata. The write-guard allowlists those calls in `commit.py`
-plus `Path.mkdir` in `state/store.py`.
+**Current state: Phases 0–9 complete. 425 tests passing.**
+Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
+artwork is placed under a userdata `config/grid/` only through
+`steam/artwork.py`. Unit tests use `tmp_path` fake userdata; this host's
+live Steam grid is not written here. Live visual checks of portrait, wide,
+hero, logo, and icon (PNG/JPEG/WebP) are Phase 10 / TEST-005.
 
 Legend: `[x]` done · `[ ]` not started · `[~]` partial
 
@@ -98,6 +98,7 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `debug steam` — Phase 4 installations and accounts, plus §14 running status; read-only
 - [x] `debug identity` — Phase 5; never creates state or writes Steam
 - [x] `debug dump-shortcuts` — Phase 6; parsed VDF, never writes
+- [x] `debug steamgriddb` — Phase 8; search/list only, never writes Steam
 
 ## Phase 2 — Launch adapters (§10)
 
@@ -372,16 +373,66 @@ the temp copy updated, and the real userdata mtime/size/bytes were unchanged.
 ### Not written, on purpose
 
 - The development host's real `shortcuts.vdf` (961 entries)
-- Artwork / grid files (Phase 8–9)
+- The development host's live `config/grid/` (Phase 9 unit tests use tmp userdata)
 - Collections (§24)
+
+## Phase 8 — SteamGridDB client (§21–§23)
+
+Complete. HTTP is mocked in unit tests; no live SteamGridDB key is required
+to run the suite. Artwork is downloaded only to a caller-supplied temp path.
+
+- [x] Bearer auth; `SGDB_API_KEY`; optional 0600 config-file key
+- [x] `search_games`, `get_grids` / `get_heroes` / `get_logos` / `get_icons`
+- [x] Connect and read timeouts
+- [x] Bounded retry for 429/5xx with `Retry-After` when present
+- [x] No hardcoded 0.35s "official" rate limit (rule 21)
+- [x] Validate HTTP status, `success`, `data`, and asset URLs
+- [x] Empty `data` is a successful no-result
+- [x] Session GET cache / deduplication
+- [x] Download to temp; size limit; reject obvious non-images
+- [x] WebP payload with a `.png` name is not treated as invalid (rule 22)
+- [x] API key never appears in exception text
+- [x] Settings field for the key; env var takes precedence
+- [x] `debug steamgriddb search|grids|heroes|logos|icons`
+
+Tests: valid response, no results, 401, 404, 429, timeout, non-image.
+
+### Not yet done, and deliberately so
+
+Live SteamGridDB + live Steam visual verification of placed artwork is
+Phase 10. This client still does not write `grid/` itself.
+
+## Phase 9 — Artwork UI (§18.4, §19–§20, §22, §25.4, §26)
+
+Complete. Search, preview, and selection run off the GUI thread. Prepared
+temps are placed into `<userdata>/config/grid/` *after* a successful VDF
+commit. A missing API key keeps import shortcut-only.
+
+- [x] Editable SteamGridDB search, prefilled with the display name
+- [x] Previews, per-slot selection, skip, skip remaining, cancel=skip
+- [x] Unsigned 32-bit decimal naming (`<id>p`, `<id>`, `_hero`, `_logo`, `_icon`)
+- [x] Not the derived 64-bit `game_id` (rule 13)
+- [x] Persistent shortcut `icon` is the absolute `_icon` path (§20)
+- [x] WebP payload kept under a `.png` filename (rule 22)
+- [x] Same-directory temp + `os.replace`; never stream onto the live name
+- [x] Order: temps → VDF → state → artwork; artwork failure does not roll back the shortcut
+- [x] Combined import still requires Steam closed
+- [x] HTTP off the GUI thread; one SteamGridDB client per worker
+- [x] Write-guard allowlists `steam/artwork.py` only for `grid/` writes
+
+### Not written, on purpose
+
+- This host's live Steam `config/grid/`
+- Collections (§24)
+- Artwork-only refresh while Steam is running (§28; later)
 
 ## Not started
 
-Phases 8–11. Specifically **not** implemented, as instructed:
+Phases 10–11. Specifically **not** implemented, as instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
 - Any Flatpak permission modification (§11, rule 23)
-- SteamGridDB and artwork commit
+- Native end-to-end on live Steam (Phase 10) and Flatpak Steam matrix (Phase 11)
 
 ---
 
@@ -807,4 +858,4 @@ required before any of the first two can move out of "experimental". See
 | malformed-`Hidden` policy decided (OPEN-4) | **no** — must not ship by omission |
 | backups are recoverable | **yes** — Phase 7 timestamped copies; not crash-tested on real hardware |
 | unsigned 32-bit artwork naming confirmed | **yes** — 565/565 on real data |
-| SteamGridDB failures cannot corrupt Steam state | not started (Phase 8) |
+| SteamGridDB failures cannot corrupt Steam state | **yes** — Phase 8 client never writes Steam paths |

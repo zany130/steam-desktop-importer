@@ -10,7 +10,7 @@ not worth reimplementing.
 
 Note that resolving a *source* icon is not the same as assigning a Steam
 shortcut icon. §20 requires the shortcut icon to be a persistent absolute path
-that the importer writes itself; that is Phase 9 work.
+that the importer writes itself (``steam/artwork.py`` / Phase 9).
 """
 
 from __future__ import annotations

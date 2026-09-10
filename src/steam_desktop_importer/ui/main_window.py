@@ -1,14 +1,17 @@
-"""Main window (IMPLEMENTATION.md §25, Phases 3–7).
+"""Main window (IMPLEMENTATION.md §25, Phases 3–9).
 
-Import and Relink commit ``shortcuts.vdf`` through the Phase 7 transaction.
-They stay disabled while Steam is running, the probe is uncertain, or no
+Import and Relink commit ``shortcuts.vdf`` through the Phase 7 transaction,
+then place selected SteamGridDB artwork under ``config/grid/``. They stay
+disabled while Steam is running, the probe is uncertain, or no
 installation+account is selected.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+import tempfile
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QThreadPool
 from PySide6.QtGui import QAction, QKeySequence
@@ -33,7 +36,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..desktop.discovery import DiscoveryResult
-from ..models import SOURCE_KINDS, SteamAccount, SteamInstallation, UnsupportedCode
+from ..models import SOURCE_KINDS, DesktopApplication, SteamAccount, SteamInstallation, UnsupportedCode
 from ..state import (
     STATUS_CHANGED,
     STATUS_IMPORTED,
@@ -50,6 +53,7 @@ from ..steam import (
     CommitError,
     CommitHooks,
     ImportPlanningError,
+    ImportResult,
     apply_applications,
     detect_steam_running,
     first_import_candidate,
@@ -61,7 +65,9 @@ from ..steam import (
     steam_allows_write,
 )
 from ..steam.running import SteamRunningStatus
+from ..steamgriddb.auth import resolve_api_key
 from .account_dialog import AccountDialog
+from .artwork_dialog import ACTION_SKIP_REMAINING, ACTION_USE, ArtworkDialog
 from .delegates import source_badge_delegate, status_badge_delegate
 from .models import ApplicationFilterProxy, ApplicationTableModel, Column
 from .settings_dialog import SettingsDialog
@@ -771,33 +777,24 @@ class MainWindow(QMainWindow):
             f"will be created.{extra}",
         ):
             return
+        apps = [row.app for row in rows]
         try:
-            result = apply_applications(
-                [row.app for row in rows],
-                installation=installation,
-                account=account,
-                store=self._store,
-                steam_status=self._running,
-                hooks=self._commit_hooks(),
-            )
+            with tempfile.TemporaryDirectory(prefix="sdi-art-") as tmp:
+                artwork_files = self._prepare_import_artwork(apps, Path(tmp))
+                result = apply_applications(
+                    apps,
+                    installation=installation,
+                    account=account,
+                    store=self._store,
+                    steam_status=self._running,
+                    hooks=self._commit_hooks(),
+                    artwork_files=artwork_files,
+                )
         except (CommitError, ImportPlanningError) as error:
             QMessageBox.warning(self, "Import failed", str(error))
             self._refresh_import_statuses()
             return
-        backup = (
-            f"\nBackup: {result.commit.backup_path}" if result.commit.backup_path else ""
-        )
-        state_note = ""
-        if result.state_errors:
-            state_note = "\n\nState store errors (VDF was written):\n" + "\n".join(
-                result.state_errors
-            )
-        QMessageBox.information(
-            self,
-            "Import complete",
-            f"Wrote {len(result.imported)} shortcut(s).{backup}{state_note}",
-        )
-        self._refresh_import_statuses()
+        self._report_write_result("Import complete", result, apps, installation, account)
 
     def _relink_selected(self) -> None:
         blocked = self._write_ready_reason()
@@ -838,25 +835,121 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
-            result = relink_application(
-                app,
-                match.appid_unsigned,
-                installation=installation,
-                account=account,
-                store=self._store,
-                steam_status=self._running,
-                hooks=self._commit_hooks(),
-            )
+            with tempfile.TemporaryDirectory(prefix="sdi-art-") as tmp:
+                artwork_files = self._prepare_import_artwork([app], Path(tmp))
+                result = relink_application(
+                    app,
+                    match.appid_unsigned,
+                    installation=installation,
+                    account=account,
+                    store=self._store,
+                    steam_status=self._running,
+                    hooks=self._commit_hooks(),
+                    artwork_files=artwork_files,
+                )
         except (CommitError, ImportPlanningError) as error:
             QMessageBox.warning(self, "Relink failed", str(error))
             self._refresh_import_statuses()
             return
+        self._report_write_result("Relink complete", result, [app], installation, account)
+
+    def _prepare_import_artwork(
+        self,
+        apps: Sequence[DesktopApplication],
+        dest_dir: Path,
+    ) -> dict[str, dict[str, Path]]:
+        """Collect per-app temps. No key means shortcut-only import."""
+        if not apps or not resolve_api_key():
+            return {}
+        files: dict[str, dict[str, Path]] = {}
+        for app in apps:
+            dialog = ArtworkDialog(app, dest_dir, parent=self)
+            dialog.exec()
+            choice = dialog.choice()
+            if choice.action == ACTION_SKIP_REMAINING:
+                break
+            if choice.action == ACTION_USE and choice.files:
+                files[app.desktop_id] = dict(choice.files)
+        return files
+
+    def _report_write_result(
+        self,
+        title: str,
+        result: ImportResult,
+        apps: Sequence[DesktopApplication],
+        installation: SteamInstallation,
+        account: SteamAccount,
+    ) -> None:
+        backup = (
+            f"\nBackup: {result.commit.backup_path}" if result.commit.backup_path else ""
+        )
+        notes = []
+        if result.state_errors:
+            notes.append(
+                "State store errors (VDF was written):\n" + "\n".join(result.state_errors)
+            )
+        if result.artwork_errors:
+            notes.append(
+                "Artwork errors (shortcuts remain valid):\n"
+                + "\n".join(result.artwork_errors)
+            )
+        extra = ("\n\n" + "\n\n".join(notes)) if notes else ""
         QMessageBox.information(
             self,
-            "Relink complete",
-            f"Mapped {app.desktop_id} to AppID {result.imported[0].appid_unsigned}.",
+            title,
+            f"Wrote {len(result.imported)} shortcut(s).{backup}{extra}",
         )
+        if result.artwork_errors:
+            retry = QMessageBox.question(
+                self,
+                "Retry artwork?",
+                "Shortcuts were written. Retry downloading and placing artwork?",
+                QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.No,
+            )
+            if retry == QMessageBox.StandardButton.Yes:
+                self._retry_artwork(apps, installation, account, result)
         self._refresh_import_statuses()
+
+    def _retry_artwork(
+        self,
+        apps: Sequence[DesktopApplication],
+        installation: SteamInstallation,
+        account: SteamAccount,
+        previous: ImportResult,
+    ) -> None:
+        failed = {
+            app.desktop_id
+            for app in apps
+            if any(message.startswith(app.desktop_id) for message in previous.artwork_errors)
+        }
+        targets = [app for app in apps if app.desktop_id in failed] or list(apps)
+        try:
+            with tempfile.TemporaryDirectory(prefix="sdi-art-") as tmp:
+                artwork_files = self._prepare_import_artwork(targets, Path(tmp))
+                if not artwork_files:
+                    return
+                retry_apps = [app for app in targets if app.desktop_id in artwork_files]
+                result = apply_applications(
+                    retry_apps,
+                    installation=installation,
+                    account=account,
+                    store=self._store,
+                    steam_status=self._running,
+                    hooks=self._commit_hooks(),
+                    artwork_files=artwork_files,
+                )
+        except (CommitError, ImportPlanningError) as error:
+            QMessageBox.warning(self, "Artwork retry failed", str(error))
+            return
+        if result.artwork_errors:
+            QMessageBox.warning(
+                self,
+                "Artwork still incomplete",
+                "Shortcuts remain valid.\n" + "\n".join(result.artwork_errors),
+            )
+        else:
+            QMessageBox.information(self, "Artwork updated", "Artwork was written.")
 
     def _update_selection_count(self) -> None:
         count = len(self._model.selected_applications())

@@ -10,7 +10,7 @@ on a separate ``QObject`` because ``QRunnable`` is not one.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
@@ -24,6 +24,7 @@ from ..steam import discover_accounts, discover_installations
 from ..steam.running import SteamRunningStatus, detect_steam_running
 
 __all__ = [
+    "CallableWorker",
     "ScanWorker",
     "SteamProbeWorker",
     "account_label",
@@ -94,6 +95,34 @@ class SteamProbeWorker(QRunnable):
             [(installation, accounts[installation.key]) for installation in installations],
             running,
         )
+
+
+class _CallableSignals(QObject):
+    finished = Signal(object)
+    failed = Signal(str)
+
+
+class CallableWorker(QRunnable):
+    """Run an arbitrary callable off the GUI thread.
+
+    SteamGridDB uses a fresh client inside each callable so workers do not
+    share a ``requests.Session`` (those are not thread-safe).
+    """
+
+    def __init__(self, fn: Callable[[], object]) -> None:
+        super().__init__()
+        self.signals = _CallableSignals()
+        self.setAutoDelete(True)
+        self._fn = fn
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self._fn()
+        except Exception as error:  # noqa: BLE001
+            self.signals.failed.emit(str(error))
+            return
+        self.signals.finished.emit(result)
 
 
 def installation_label(installation: SteamInstallation) -> str:
