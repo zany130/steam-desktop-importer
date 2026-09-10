@@ -1,10 +1,8 @@
 """Import-status classification (IMPLEMENTATION.md §25.1, Phase 5).
 
-``Imported`` here means *managed in importer state*, not *verified present in
-``shortcuts.vdf``*. Confirming the VDF row exists is Phase 6. Until the
-importer has written a mapping, every application is ``New`` or, if a
-read-only VDF identity looks like the same launch, ``Possible Existing
-Match``.
+``Imported`` here means *managed in importer state*. A successful import
+writes the VDF row first; a crash before ``save_mapping`` can still leave
+the shortcut unmanaged (§27).
 """
 
 from __future__ import annotations

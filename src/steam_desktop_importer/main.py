@@ -11,8 +11,8 @@ Implemented: ``debug roots``, ``debug scan``, ``debug desktop-entry``,
 it and never writes to Steam. ``debug steam`` reads Steam's configuration and
 never writes to it.
 
-With no subcommand the PySide6 GUI starts. It is also read-only: the Import
-button is present and disabled.
+With no subcommand the PySide6 GUI starts. Import writes ``shortcuts.vdf``
+only through the Phase 7 transaction, and only while Steam is closed.
 """
 
 from __future__ import annotations
@@ -475,7 +475,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="steam-desktop-importer",
         description="Import .desktop applications into Steam as non-Steam shortcuts. "
-        "With no subcommand, opens the GUI. Nothing writes to Steam.",
+        "With no subcommand, opens the GUI. Debug commands never write to Steam.",
     )
     subcommands = parser.add_subparsers(dest="command", required=False)
     parser.set_defaults(func=_run_gui)

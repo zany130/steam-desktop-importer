@@ -61,10 +61,10 @@ The importer must never perform the `flatpak override` itself
 
 ## Safety rules for anyone using a live environment
 
-1. Nothing in this repository may open a live `shortcuts.vdf` for writing
-   until Phase 7 is complete and its failure-injection tests pass
-   (IMPLEMENTATION.md §31 Phase 7: "Do not enable live writes until this
-   phase passes").
+1. Live `shortcuts.vdf` writes go only through the Phase 7 transaction
+   (`steam/commit.py`) and require Steam to be closed. Debug commands and
+   capture tooling stay read-only. Do not point tests at this host's real
+   userdata; unit tests use tmp copies.
 2. Phase 0 capture tooling (`scripts/characterize_shortcuts.py`) is
    read-only by construction.
 3. Before any future live write test: fully exit Steam, and independently

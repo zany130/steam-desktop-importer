@@ -1,7 +1,8 @@
-"""Steam installation and account discovery (IMPLEMENTATION.md §12-§13, Phase 4).
+"""Steam installation, account discovery, VDF documents, and safe commits.
 
-Read-only. Nothing in this package writes to a Steam directory, and neither
-installation nor account selection is ever resolved silently when there is a
+Phases 4–6 are read-only against Steam paths. Phase 7 may replace
+``shortcuts.vdf`` only through :func:`commit_shortcuts` / :func:`apply_applications`.
+Installation and account selection is never resolved silently when there is a
 real choice to make (rules 7 and 8).
 """
 
@@ -22,6 +23,28 @@ from .appid import (
     game_id_64,
     int32_to_uint32,
     uint32_to_int32,
+)
+from .commit import (
+    MAX_BACKUPS,
+    CommitError,
+    CommitHooks,
+    CommitResult,
+    CommitValidationError,
+    ImporterLock,
+    ImporterLockedError,
+    SteamIsRunningError,
+    VdfChangedError,
+    commit_shortcuts,
+    lock_path_for,
+    steam_allows_write,
+    temp_path_for,
+)
+from .importing import (
+    ImportPlanningError,
+    ImportResult,
+    ImportedShortcut,
+    apply_applications,
+    relink_application,
 )
 from .installations import (
     FLATPAK_STEAM_APP_ID,
@@ -52,20 +75,34 @@ from .shortcuts import (
 
 __all__ = [
     "FLATPAK_STEAM_APP_ID",
+    "MAX_BACKUPS",
     "NATIVE_ROOT_CANDIDATES",
     "STEAMID64_BASE",
     "AccountSelection",
     "AppIdAllocationError",
     "AppIdNotFoundError",
+    "CommitError",
+    "CommitHooks",
+    "CommitResult",
+    "CommitValidationError",
     "ExistingShortcut",
+    "ImportPlanningError",
+    "ImportResult",
+    "ImportedShortcut",
+    "ImporterLock",
+    "ImporterLockedError",
     "InstallationSelection",
     "PossibleMatch",
     "STEAM_NEW_ENTRY_KEYS",
     "ShortcutDocument",
     "ShortcutEntry",
+    "SteamIsRunningError",
     "SteamRunningStatus",
+    "VdfChangedError",
     "account_id32_to_steam_id64",
     "allocate_appid",
+    "apply_applications",
+    "commit_shortcuts",
     "detect_steam_running",
     "discover_accounts",
     "discover_installations",
@@ -77,11 +114,15 @@ __all__ = [
     "int32_to_uint32",
     "is_steam_root",
     "list_existing_shortcuts",
+    "lock_path_for",
     "normalize_exe",
     "quote_steam_token",
+    "relink_application",
     "select_account",
     "select_installation",
     "shortcuts_vdf_path",
+    "steam_allows_write",
     "steam_id64_to_account_id32",
+    "temp_path_for",
     "uint32_to_int32",
 ]

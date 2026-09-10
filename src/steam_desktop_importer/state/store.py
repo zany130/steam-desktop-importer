@@ -10,7 +10,7 @@ already exists; ``Name=`` / ``Exec=`` updates change ``last_known_*`` and
 
 §27 says the VDF commit happens *before* the state commit. This store
 therefore does not allocate-and-insert in one step: callers persist a mapping
-only when they mean to. Phase 7 will insert after a successful VDF write.
+only after a successful VDF write.
 """
 
 from __future__ import annotations

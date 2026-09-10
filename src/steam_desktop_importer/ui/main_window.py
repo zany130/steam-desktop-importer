@@ -1,13 +1,14 @@
-"""Main window (IMPLEMENTATION.md §25, Phases 3–5).
+"""Main window (IMPLEMENTATION.md §25, Phases 3–7).
 
-The Import button is visible and disabled on purpose: selection and status
-have to be exercisable, but nothing here writes to Steam. The Phase 5
-SQLite store is written; ``shortcuts.vdf`` is only opened ``rb``.
+Import and Relink commit ``shortcuts.vdf`` through the Phase 7 transaction.
+They stay disabled while Steam is running, the probe is uncertain, or no
+installation+account is selected.
 """
 
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 
 from PySide6.QtCore import QSize, Qt, QThreadPool
 from PySide6.QtGui import QAction, QKeySequence
@@ -43,13 +44,21 @@ from ..state import (
     current_exec,
     current_name,
     default_state_path,
+    likely_existing_match,
 )
 from ..steam import (
+    CommitError,
+    CommitHooks,
+    ImportPlanningError,
+    apply_applications,
+    detect_steam_running,
     first_import_candidate,
     list_existing_shortcuts,
+    relink_application,
     select_account,
     select_installation,
     shortcuts_vdf_path,
+    steam_allows_write,
 )
 from ..steam.running import SteamRunningStatus
 from .account_dialog import AccountDialog
@@ -68,9 +77,6 @@ __all__ = ["MainWindow", "current_desktops", "run_app"]
 _SOURCE_ALL = "all sources"
 _PLACEHOLDER_INSTALL = "Select a Steam installation…"
 _PLACEHOLDER_ACCOUNT = "Select a Steam account…"
-_IMPORT_DISABLED = (
-    "Importing is not implemented yet. Safe writes to shortcuts.vdf are Phase 7."
-)
 _IMPORT_FILTER_ALL = "All import statuses"
 _IMPORT_FILTER_STATUSES = (
     STATUS_NEW,
@@ -78,6 +84,7 @@ _IMPORT_FILTER_STATUSES = (
     STATUS_CHANGED,
     STATUS_POSSIBLE_MATCH,
 )
+_IMPORTABLE_STATUSES = frozenset({STATUS_NEW, STATUS_CHANGED, STATUS_IMPORTED})
 
 
 def current_desktops(environ: dict[str, str] | None = None) -> set[str]:
@@ -94,6 +101,7 @@ class MainWindow(QMainWindow):
         *,
         auto_refresh: bool = True,
         state_store: StateStore | None = None,
+        detect_steam: Callable[[], SteamRunningStatus] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Steam Desktop Importer")
@@ -114,6 +122,7 @@ class MainWindow(QMainWindow):
         self._selected_installation: SteamInstallation | None = None
         self._selected_account: SteamAccount | None = None
         self._running: SteamRunningStatus | None = None
+        self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
         self._scan_busy = False
         self._steam_busy = False
@@ -261,7 +270,12 @@ class MainWindow(QMainWindow):
 
         self.import_button = QPushButton("Import selected")
         self.import_button.setEnabled(False)
-        self.import_button.setToolTip(_IMPORT_DISABLED)
+        self.relink_button = QPushButton("Relink selected")
+        self.relink_button.setEnabled(False)
+        self.relink_button.setToolTip(
+            "Bind a Possible Existing Match to the existing shortcut instead of "
+            "creating a new one."
+        )
 
         bottom = QWidget()
         bottom_layout = QVBoxLayout(bottom)
@@ -272,6 +286,7 @@ class MainWindow(QMainWindow):
         actions.addStretch()
         self.selection_label = QLabel("0 selected")
         actions.addWidget(self.selection_label)
+        actions.addWidget(self.relink_button)
         actions.addWidget(self.import_button)
         bottom_layout.addLayout(actions)
 
@@ -314,12 +329,15 @@ class MainWindow(QMainWindow):
         self.select_visible.clicked.connect(self._select_visible)
         self.clear_selection.clicked.connect(self._clear_selection)
         self.acknowledge.clicked.connect(self._acknowledge_collision)
+        self.import_button.clicked.connect(self._import_selected)
+        self.relink_button.clicked.connect(self._relink_selected)
         self.install_combo.currentIndexChanged.connect(self._on_install_chosen)
         self.account_combo.currentIndexChanged.connect(self._on_account_chosen)
         self.table.selectionModel().currentRowChanged.connect(self._on_row_changed)
         self._model.dataChanged.connect(self._update_selection_count)
         self._proxy.modelReset.connect(self._update_counts)
         self._proxy.layoutChanged.connect(self._update_counts)
+        self._update_import_actions()
 
     def _apply_default_filters(self) -> None:
         self.show_unsupported.setChecked(True)
@@ -513,20 +531,20 @@ class MainWindow(QMainWindow):
             self.steam_status.setText(f"Steam: running ({reason})")
             self.steam_status.setStyleSheet("color: #b3261e;")
             self.steam_status.setToolTip("\n".join(status.evidence))
-            return
-        if not status.is_certain:
+        elif not status.is_certain:
             self.steam_status.setText(
                 f"Steam: unclear ({status.inspection_failures} processes unreadable)"
             )
             self.steam_status.setStyleSheet("color: #c05621;")
             self.steam_status.setToolTip(
-                "Some processes could not be inspected. A conservative false "
-                "positive is required before any future write."
+                "Some processes could not be inspected. A write is blocked until "
+                "the probe is certain Steam is closed."
             )
-            return
-        self.steam_status.setText("Steam: not running")
-        self.steam_status.setStyleSheet("color: #2e7d32;")
-        self.steam_status.setToolTip("No Steam process matched.")
+        else:
+            self.steam_status.setText("Steam: not running")
+            self.steam_status.setStyleSheet("color: #2e7d32;")
+            self.steam_status.setToolTip("No Steam process matched.")
+        self._update_import_actions()
 
     def _update_banner(self) -> None:
         messages: list[str] = []
@@ -655,9 +673,195 @@ class MainWindow(QMainWindow):
         self._acknowledged = list(self._store.acknowledged_collisions())
         self._start_scan()
 
+    def _selected_import_rows(self):
+        return [
+            row
+            for row in self._model.selected_rows()
+            if row.is_importable and row.import_status in _IMPORTABLE_STATUSES
+        ]
+
+    def _selected_relink_rows(self):
+        return [
+            row
+            for row in self._model.selected_rows()
+            if row.is_importable and row.import_status == STATUS_POSSIBLE_MATCH
+        ]
+
+    def _commit_hooks(self) -> CommitHooks:
+        return CommitHooks(detect_steam=self._detect_steam)
+
+    def _write_ready_reason(self) -> str | None:
+        if self._selected_installation is None or self._selected_account is None:
+            return "Select a Steam installation and account first."
+        if self._running is None:
+            return "Steam status has not been checked yet."
+        if self._running.running:
+            return "Close Steam before writing shortcuts.vdf."
+        if not steam_allows_write(self._running):
+            return "Steam status is uncertain; a write is blocked."
+        return None
+
+    def _update_import_actions(self) -> None:
+        blocked = self._write_ready_reason()
+        to_import = self._selected_import_rows()
+        to_relink = self._selected_relink_rows()
+        self.import_button.setEnabled(blocked is None and bool(to_import))
+        self.relink_button.setEnabled(blocked is None and len(to_relink) == 1)
+        if blocked is not None:
+            self.import_button.setToolTip(blocked)
+            self.relink_button.setToolTip(blocked)
+            return
+        if not to_import:
+            self.import_button.setToolTip(
+                "Select New, Changed, or Imported applications. Possible "
+                "Existing Match must be relinked explicitly."
+            )
+        else:
+            self.import_button.setToolTip(
+                f"Import {len(to_import)} application(s) into shortcuts.vdf."
+            )
+        if len(to_relink) != 1:
+            self.relink_button.setToolTip(
+                "Select exactly one Possible Existing Match to take ownership "
+                "of the existing shortcut."
+            )
+        else:
+            self.relink_button.setToolTip(
+                "Bind this desktop entry to the matching existing shortcut."
+            )
+
+    def _confirm_write(self, title: str, text: str) -> bool:
+        answer = QMessageBox.question(
+            self,
+            title,
+            text,
+            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Ok,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Ok
+
+    def _import_selected(self) -> None:
+        blocked = self._write_ready_reason()
+        if blocked is not None:
+            QMessageBox.warning(self, "Cannot import", blocked)
+            return
+        rows = self._selected_import_rows()
+        skipped = len(self._selected_relink_rows())
+        if not rows:
+            QMessageBox.information(
+                self,
+                "Nothing to import",
+                "Select New, Changed, or Imported applications. Possible "
+                "Existing Match must be relinked explicitly.",
+            )
+            return
+        extra = (
+            f"\n\n{skipped} Possible Existing Match row(s) will be skipped."
+            if skipped
+            else ""
+        )
+        account = self._selected_account
+        installation = self._selected_installation
+        assert account is not None and installation is not None
+        if not self._confirm_write(
+            "Import into Steam",
+            f"Write {len(rows)} shortcut(s) to\n{shortcuts_vdf_path(account)}\n"
+            f"for {account_label(account)}?\n\n"
+            "Steam must stay closed. A timestamped backup of shortcuts.vdf "
+            f"will be created.{extra}",
+        ):
+            return
+        try:
+            result = apply_applications(
+                [row.app for row in rows],
+                installation=installation,
+                account=account,
+                store=self._store,
+                steam_status=self._running,
+                hooks=self._commit_hooks(),
+            )
+        except (CommitError, ImportPlanningError) as error:
+            QMessageBox.warning(self, "Import failed", str(error))
+            self._refresh_import_statuses()
+            return
+        backup = (
+            f"\nBackup: {result.commit.backup_path}" if result.commit.backup_path else ""
+        )
+        state_note = ""
+        if result.state_errors:
+            state_note = "\n\nState store errors (VDF was written):\n" + "\n".join(
+                result.state_errors
+            )
+        QMessageBox.information(
+            self,
+            "Import complete",
+            f"Wrote {len(result.imported)} shortcut(s).{backup}{state_note}",
+        )
+        self._refresh_import_statuses()
+
+    def _relink_selected(self) -> None:
+        blocked = self._write_ready_reason()
+        if blocked is not None:
+            QMessageBox.warning(self, "Cannot relink", blocked)
+            return
+        rows = self._selected_relink_rows()
+        if len(rows) != 1:
+            QMessageBox.information(
+                self,
+                "Select one match",
+                "Relink needs exactly one Possible Existing Match.",
+            )
+            return
+        app = rows[0].app
+        matches = [
+            shortcut
+            for shortcut in self._existing_shortcuts()
+            if likely_existing_match(app, shortcut)
+        ]
+        if len(matches) != 1:
+            QMessageBox.warning(
+                self,
+                "Cannot relink",
+                "Relink needs exactly one existing shortcut with this name and "
+                f"executable; found {len(matches)}.",
+            )
+            return
+        match = matches[0]
+        account = self._selected_account
+        installation = self._selected_installation
+        assert account is not None and installation is not None
+        if not self._confirm_write(
+            "Relink existing shortcut",
+            f"Take ownership of AppID {match.appid_unsigned} "
+            f"({match.name}) for {app.desktop_id}?\n\n"
+            "A new shortcut will not be created.",
+        ):
+            return
+        try:
+            result = relink_application(
+                app,
+                match.appid_unsigned,
+                installation=installation,
+                account=account,
+                store=self._store,
+                steam_status=self._running,
+                hooks=self._commit_hooks(),
+            )
+        except (CommitError, ImportPlanningError) as error:
+            QMessageBox.warning(self, "Relink failed", str(error))
+            self._refresh_import_statuses()
+            return
+        QMessageBox.information(
+            self,
+            "Relink complete",
+            f"Mapped {app.desktop_id} to AppID {result.imported[0].appid_unsigned}.",
+        )
+        self._refresh_import_statuses()
+
     def _update_selection_count(self) -> None:
         count = len(self._model.selected_applications())
         self.selection_label.setText(f"{count} selected")
+        self._update_import_actions()
 
     def _update_counts(self) -> None:
         visible = self._proxy.rowCount()
@@ -690,6 +894,7 @@ class MainWindow(QMainWindow):
         )
         self._model.set_import_statuses(statuses)
         self._update_banner()
+        self._update_import_actions()
         current = self.table.currentIndex()
         if current.isValid():
             self._on_row_changed(current, current)
