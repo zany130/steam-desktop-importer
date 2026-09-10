@@ -2,12 +2,12 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0–9 complete. 433 tests passing.**
+**Current state: Phases 0–10 complete on native Steam. 442 tests passing.**
 Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
 artwork is placed under a userdata `config/grid/` only through
-`steam/artwork.py`. Unit tests use `tmp_path` fake userdata; this host's
-live Steam grid is not written here. Live visual checks of portrait, wide,
-hero, logo, and icon (PNG/JPEG/WebP) are Phase 10 / TEST-005.
+`steam/artwork.py`. Unit tests use `tmp_path` fake userdata. The Phase 10
+Konsole gate is recorded in `docs/PHASE10_NATIVE_RELEASE_GATE.md`. TEST-005
+hot reload remains informational.
 
 Legend: `[x]` done · `[ ]` not started · `[~]` partial
 
@@ -427,17 +427,37 @@ commit. A missing API key keeps import shortcut-only.
 
 ### Not written, on purpose
 
-- This host's live Steam `config/grid/`
 - Collections (§24)
 - Artwork-only refresh while Steam is running (§28; later)
 
+Live `config/grid/` placement on this host is the Phase 10 native pass,
+not Phase 9 unit tests.
+
+## Phase 10 — Native Steam release gate
+
+Recorded in `docs/PHASE10_NATIVE_RELEASE_GATE.md`.
+
+- [x] Independent `shortcuts.vdf` backup outside the repository
+- [x] `debug snapshot-shortcuts` / `debug compare-snapshots` (no names)
+- [x] Import a native app (`org.kde.konsole.desktop`) through `commit.py`
+- [x] SteamGridDB artwork placed under unsigned-32-bit names after the VDF commit
+- [x] Empty `StartDir` when `Path=` is absent (rule 6)
+- [x] Persistent `icon` is the absolute `_icon` path
+- [x] Re-import keeps AppID `3511661831`
+- [x] 982 unrelated shortcuts byte-identical across both writes (Steam still closed)
+- [x] Launch Steam: Konsole shortcut, artwork, and launch confirmed
+- [x] Steam recased importer `AppName`/`Exe` to `appname`/`exe`; 980 third-party entries and all grid files unchanged; Konsole `LastPlayTime` set
+- [x] Steam killed while stuck; VDF still parsed and matched the in-session snapshot
+- [x] Post-Steam re-import: AppID `3511661831`, `LastPlayTime` kept, 983/983 byte-identical including Steam's recasing; 980/980 third-party vs pre-Konsole baseline
+- [ ] TEST-005 artwork hot reload (informational; does not block native MVP)
+
 ## Not started
 
-Phases 10–11. Specifically **not** implemented, as instructed:
+Phase 11. Specifically **not** implemented, as instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
 - Any Flatpak permission modification (§11, rule 23)
-- Native end-to-end on live Steam (Phase 10) and Flatpak Steam matrix (Phase 11)
+- Flatpak Steam matrix (Phase 11)
 
 ---
 
@@ -858,8 +878,8 @@ required before any of the first two can move out of "experimental". See
 | desktop-ID collision tests pass | **yes** — see OPEN-2 |
 | VDF round-trip fixtures pass | **yes** — Phase 6; live file also byte-identical |
 | atomic-write failure-injection tests pass | **yes** — Phase 7, tmp copies |
-| native Steam end-to-end import passes | not started (Phase 10) |
-| unrelated shortcuts survive repeated imports | not started (Phase 10) |
+| native Steam end-to-end import passes | **yes** — Konsole on native Steam (Phase 10) |
+| unrelated shortcuts survive repeated imports | **yes** — 982/982 closed-Steam; 980/980 third-party after Steam loaded, kill, and re-import |
 | malformed-`Hidden` policy decided (OPEN-4) | **no** — must not ship by omission |
 | backups are recoverable | **yes** — Phase 7 timestamped copies; not crash-tested on real hardware |
 | unsigned 32-bit artwork naming confirmed | **yes** — 565/565 on real data |

@@ -5,7 +5,8 @@ ad-hoc scripts that guess the first userdata directory".
 
 Implemented: ``debug roots``, ``debug scan``, ``debug desktop-entry``,
 ``debug launch``, ``debug steam``, ``debug identity``,
-``debug dump-shortcuts`` and ``debug steamgriddb``.
+``debug dump-shortcuts``, ``debug snapshot-shortcuts``,
+``debug compare-snapshots`` and ``debug steamgriddb``.
 
 ``debug launch`` prints the command a shortcut *would* use. It never executes
 it and never writes to Steam. ``debug steam`` reads Steam's configuration and
@@ -18,6 +19,7 @@ only through the Phase 7 transaction, and only while Steam is closed.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -44,12 +46,14 @@ from .steam import (
     discover_installations,
     first_import_candidate,
     game_id_64,
+    grid_dir,
     list_existing_shortcuts,
     select_account,
     select_installation,
     shortcuts_vdf_path,
     uint32_to_int32,
 )
+from .steam.snapshot import compare_snapshots, snapshot_from_json, snapshot_library
 
 
 def _print_roots(args: argparse.Namespace) -> int:
@@ -419,6 +423,85 @@ def _print_dump_shortcuts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _debug_target_account(args: argparse.Namespace):
+    """Resolve installation+account for read-only debug commands. Closes the store."""
+    store = StateStore(default_state_path(), create=False)
+    installations = discover_installations()
+    installation_selection = select_installation(
+        installations,
+        remembered_key=args.steam_installation or store.remembered_installation(),
+    )
+    installation = installation_selection.selected
+    if installation is None:
+        print("error: no Steam installation found", file=sys.stderr)
+        store.close()
+        return None, None, 1
+    if not installation_selection.is_resolved and args.steam_installation is None:
+        print(
+            f"warning: installation is an unconfirmed preselection ({installation_selection.reason})",
+            file=sys.stderr,
+        )
+
+    accounts = discover_accounts(installation)
+    remembered = args.account if args.account is not None else store.remembered_account(installation.key)
+    account_selection = select_account(accounts, remembered_account_id32=remembered)
+    account = account_selection.selected
+    store.close()
+    if account is None:
+        print("error: no Steam account found", file=sys.stderr)
+        return installation, None, 1
+    if not account_selection.is_resolved and args.account is None:
+        print(
+            f"warning: account is an unconfirmed preselection ({account_selection.reason})",
+            file=sys.stderr,
+        )
+    return installation, account, 0
+
+
+def _print_snapshot_shortcuts(args: argparse.Namespace) -> int:
+    """JSON fingerprints of shortcuts.vdf and grid/. No names. Never writes."""
+    installation, account, status = _debug_target_account(args)
+    if status != 0 or account is None or installation is None:
+        return 1
+    path = shortcuts_vdf_path(account)
+    snap = snapshot_library(path, grid_dir(account))
+    json.dump(snap.to_jsonable(), sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    print(
+        f"{path}: {snap.shortcut_count} shortcuts, {len(snap.grid)} grid files, "
+        f"sha256 {snap.vdf_digest}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _print_compare_snapshots(args: argparse.Namespace) -> int:
+    """Compare two snapshot JSON files. Exit 1 if unmanaged content changed."""
+    before = snapshot_from_json(Path(args.before).read_text(encoding="utf-8"))
+    after = snapshot_from_json(Path(args.after).read_text(encoding="utf-8"))
+    report = compare_snapshots(
+        before,
+        after,
+        managed_appids=tuple(args.ignore_appid or ()),
+    )
+    print(report.summary())
+    if report.unmanaged_removed_appids:
+        print(f"unmanaged removed appids: {list(report.unmanaged_removed_appids)}")
+    if report.unmanaged_changed_appids:
+        print(f"unmanaged changed appids: {list(report.unmanaged_changed_appids)}")
+    if report.unmanaged_added_appids:
+        print(f"unmanaged added appids: {list(report.unmanaged_added_appids)}")
+    if report.unmanaged_grid_removed:
+        print(f"unrelated grid removed: {list(report.unmanaged_grid_removed)}")
+    if report.unmanaged_grid_changed:
+        print(f"unrelated grid changed: {list(report.unmanaged_grid_changed)}")
+    if report.unmanaged_grid_added:
+        print(f"unrelated grid added: {list(report.unmanaged_grid_added)}")
+    print(f"added appids: {list(report.added_appids)}")
+    print(f"grid added: {len(report.grid_added)}")
+    return 0 if report.ok else 1
+
+
 def _print_launch(args: argparse.Namespace) -> int:
     """Show launch vectors for discovered entries, without writing Steam."""
     result = discover_applications()
@@ -606,6 +689,29 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("--steam-installation", help="SteamInstallation.key")
     dump.add_argument("--account", type=int, help="32-bit Steam account ID")
     dump.set_defaults(func=_print_dump_shortcuts)
+
+    snap = debug_commands.add_parser(
+        "snapshot-shortcuts",
+        help="JSON fingerprints of shortcuts.vdf and grid/ (Phase 10); no names, never writes",
+    )
+    snap.add_argument("--steam-installation", help="SteamInstallation.key")
+    snap.add_argument("--account", type=int, help="32-bit Steam account ID")
+    snap.set_defaults(func=_print_snapshot_shortcuts)
+
+    compare = debug_commands.add_parser(
+        "compare-snapshots",
+        help="compare two snapshot JSON files; exit 1 if unmanaged content changed",
+    )
+    compare.add_argument("before")
+    compare.add_argument("after")
+    compare.add_argument(
+        "--ignore-appid",
+        action="append",
+        type=int,
+        default=[],
+        help="unsigned AppID owned by this importer; repeatable",
+    )
+    compare.set_defaults(func=_print_compare_snapshots)
 
     sgdb = debug_commands.add_parser(
         "steamgriddb",

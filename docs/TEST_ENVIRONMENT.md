@@ -19,8 +19,8 @@ machine that will be used for the Phase 10 native Steam release gate.
 | Steam root | `~/.local/share/Steam` |
 | Steam root aliases | `~/.steam/steam`, `~/.steam/root` (both symlinks to the above) |
 | Steam accounts | 1 |
-| Existing non-Steam shortcuts | 783 |
-| Existing grid artwork files | 1443 |
+| Existing non-Steam shortcuts | 983 (Phase 0: 783; later SRM growth; Phase 10 added Konsole) |
+| Existing grid artwork files | 2379 |
 | `XDG_DATA_HOME` | unset (default `~/.local/share` applies) |
 | `XDG_DATA_DIRS` | set explicitly, contains duplicates — see PHASE0_FORMAT_CHARACTERIZATION.md §5 |
 | Python | 3.14.7 system; project venv pinned to 3.12 |
@@ -29,8 +29,9 @@ machine that will be used for the Phase 10 native Steam release gate.
 
 - It has a large, pre-existing, **third-party-populated** `shortcuts.vdf`.
   IMPLEMENTATION.md §34 requires proving that "unrelated existing shortcuts
-  survive repeated imports". 783 entries written by at least two different
-  writers, with two different key sets, is a demanding test of that.
+  survive repeated imports". 983 entries written by at least two different
+  third-party writers plus this importer, with two different key sets, is a
+  demanding test of that.
 - It has all four source kinds available: native RPM apps, Flatpaks, Snaps
   (if snapd is enabled), and integrated AppImages.
 - `XDG_DATA_DIRS` is messy in a realistic way (duplicates, a transient
@@ -75,7 +76,10 @@ The importer must never perform the `flatpak override` itself
 
 ## Current status of live writes
 
-Unit tests never point at this host's real userdata. `shortcuts.vdf` writes
-go through `steam/commit.py` and artwork through `steam/artwork.py`, both
-against tmp fixtures in the suite. Phase 10 is the live native visual check
-of portrait/wide/hero/logo/icon (PNG/JPEG/WebP) on a real Steam install.
+Unit tests never point at this host's real userdata. Live `shortcuts.vdf`
+writes go through `steam/commit.py` and artwork through `steam/artwork.py`.
+Phase 10 imported native Konsole on this account, confirmed it in the
+Steam UI, and re-imported after Steam was killed while stuck. The VDF
+still parsed; AppID `3511661831` was kept. See
+`docs/PHASE10_NATIVE_RELEASE_GATE.md`. Independent backups live under
+`~/.local/state/steam-desktop-importer/phase10-backups/` (not in git).

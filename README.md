@@ -8,8 +8,10 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0–9 are implemented.** A live native end-to-end pass (Phase 10)
-and the Flatpak Steam matrix (Phase 11) are not.
+**Phases 0–10 are implemented** on native Steam. Phase 10 imported Konsole,
+Steam showed the shortcut with the right artwork and launched it, and a
+re-import after Steam was killed kept AppID `3511661831` with third-party
+shortcuts intact. The Flatpak Steam matrix (Phase 11) is not started.
 
 The GUI can import selected applications into `shortcuts.vdf` when Steam is
 closed. With `SGDB_API_KEY` (or a saved key), it can search SteamGridDB,
@@ -28,7 +30,8 @@ directory after the VDF commit. Without a key, import is shortcut-only.
 | 7 | Safe VDF commit | done |
 | 8 | SteamGridDB client | done |
 | 9 | Artwork UI and `grid/` placement | done |
-| 10–11 | Native / Flatpak Steam release gates | not started |
+| 10 | Native Steam release gate | done |
+| 11 | Flatpak Steam experimental adapter | not started |
 
 See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
 open issues.
@@ -64,6 +67,10 @@ steam-desktop-importer debug identity org.kde.kate.desktop
 # Show parsed shortcuts.vdf. Read-only; never writes.
 steam-desktop-importer debug dump-shortcuts
 
+# Fingerprint shortcuts.vdf + grid/ without names. Read-only; never writes.
+steam-desktop-importer debug snapshot-shortcuts > /tmp/sdi-before.json
+steam-desktop-importer debug compare-snapshots /tmp/sdi-before.json /tmp/sdi-after.json --ignore-appid 3511661831
+
 # Search SteamGridDB. Needs SGDB_API_KEY or a saved key. Never writes Steam.
 steam-desktop-importer debug steamgriddb search Kate
 steam-desktop-importer debug steamgriddb grids 2254 --dimensions 600x900
@@ -93,11 +100,11 @@ preselects but refuses to decide.
 
 Phase 5 adds a SQLite store at `$XDG_STATE_HOME/steam-desktop-importer/`
 and importer-owned AppID allocation. On this host an empty store classifies
-all 804 resolved entries as New. The live `shortcuts.vdf` now has 961
-identities (Phase 0 recorded 783; the added shortcuts were created with
-Steam ROM Manager, not by this importer); none of those AppIDs collide with a
-first-import candidate, and none pair name+exe with a desktop entry, so
-Possible Existing Match is 0. `Imported` means managed in importer state.
+all 804 resolved entries as New. The live `shortcuts.vdf` now has 983 identities (Phase 0 recorded 783;
+later 961 from Steam ROM Manager; this importer then added Konsole as the
+Phase 10 native probe). None of the pre-existing AppIDs collided with that
+first-import candidate, and none paired name+exe with a desktop entry, so
+Possible Existing Match stayed 0. `Imported` means managed in importer state.
 A successful import writes the VDF first, then the mapping.
 
 Phase 6 can load, update by AppID, create a Steam-schema entry, and
