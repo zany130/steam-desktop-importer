@@ -313,7 +313,7 @@ def compare_snapshots(
         elif not digest_changed and index_changed:
             changed.append(appid)
     # Index-only moves are still a change to the unrelated document.
-    changed_set = set(changed)
+    changed_set = set(changed) | set(before.duplicate_appids) | set(after.duplicate_appids)
     changed = tuple(sorted(changed_set))
     moved = tuple(moved)
 
