@@ -1,8 +1,7 @@
-"""Tests pinning CURRENT behaviour for unresolved specification questions.
+"""Tests pinning behaviour for CHECKLIST.md open issues and their resolutions.
 
-Each test here corresponds to an entry in CHECKLIST.md's "Open issues"
-section. They exist so that the behaviour is visible and any change to it is
-deliberate. They are **not** an endorsement of the current behaviour.
+Each test here corresponds to an entry in that section. They exist so that
+the behaviour is visible and any change to it is deliberate.
 """
 
 from __future__ import annotations
@@ -303,17 +302,45 @@ def test_open_3_flatpak_file_forwarding_markers_survive_field_code_removal(sourc
     assert app.flatpak_id == "org.example.FlatpakApp"
 
 
-def test_open_4_quoted_boolean_falls_back_to_the_default(tmp_path: Path):
+def test_open_4_quoted_terminal_still_uses_the_key_default(tmp_path: Path):
     """OPEN-4: ``Terminal='False'`` appears in the wild (7 entries observed).
 
-    Only ``true``/``false`` are valid. A quoted value is invalid and falls back
-    to the default, which here happens to give the intended result, but only
-    by luck. A quoted ``'True'`` would silently become False.
+    Cosmetic keys still match GLib: a quoted value is invalid and falls back
+    to the key default. ``Terminal='True'`` therefore becomes False.
     """
-    path = tmp_path / "quoted.desktop"
+    path = tmp_path / "quoted-terminal.desktop"
     path.write_text(
         "[Desktop Entry]\nType=Application\nName=Q\nExec=/bin/true\nTerminal='True'\n"
     )
     parsed = parse_desktop_entry(path)
     assert parsed.terminal is False
     assert any("not a valid boolean" in warning for warning in parsed.warnings)
+
+
+def test_open_4_malformed_hidden_is_treated_as_masking(tmp_path: Path):
+    """OPEN-4 resolved: invalid ``Hidden`` cannot un-mask an entry.
+
+    Missing ``Hidden`` stays false. ``true``/``false``/``1``/``0`` are
+    unchanged. Any other value, including quoted or capitalized forms, is
+    treated as hidden so a packager's hide intent cannot fall back to false.
+    """
+    missing = tmp_path / "missing-hidden.desktop"
+    missing.write_text("[Desktop Entry]\nType=Application\nName=M\nExec=/bin/true\n")
+    assert parse_desktop_entry(missing).hidden is False
+
+    valid = tmp_path / "hidden-false.desktop"
+    valid.write_text(
+        "[Desktop Entry]\nType=Application\nName=V\nExec=/bin/true\nHidden=false\n"
+    )
+    assert parse_desktop_entry(valid).hidden is False
+
+    for value in ("'True'", "'False'", "TRUE", "False", "yes"):
+        path = tmp_path / "malformed-hidden.desktop"
+        path.write_text(
+            "[Desktop Entry]\nType=Application\nName=H\nExec=/bin/true\n"
+            f"Hidden={value}\n"
+        )
+        parsed = parse_desktop_entry(path)
+        assert parsed.hidden is True, value
+        assert any("not a valid boolean" in warning for warning in parsed.warnings)
+        assert any("True is used" in warning for warning in parsed.warnings)

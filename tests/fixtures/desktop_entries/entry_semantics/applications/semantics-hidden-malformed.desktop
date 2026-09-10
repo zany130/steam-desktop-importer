@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Malformed Hidden
+Comment=Quoted Hidden is not a valid boolean. OPEN-4 treats it as masking so
+Comment[x-note]=the entry cannot be offered for import by falling back to false.
+Exec=/usr/bin/malformed-hidden
+Icon=malformed-hidden
+Terminal=false
+Hidden='True'

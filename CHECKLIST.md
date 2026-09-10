@@ -2,7 +2,8 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0–10 complete on native Steam. 442 tests passing.**
+**Current state: Phases 0–10 complete on native Steam. OPEN-4 resolved.
+445 tests passing.**
 Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
 artwork is placed under a userdata `config/grid/` only through
 `steam/artwork.py`. Unit tests use `tmp_path` fake userdata. The Phase 10
@@ -68,7 +69,8 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `DBusActivatable` modelled; Exec fallback used when present
 - [x] Specification-ordered locale fallback, encoding stripped
 - [x] Semicolon lists with `\;` escaping
-- [x] Booleans restricted to `true`/`false`, legacy `1`/`0` accepted with a warning
+- [x] Booleans restricted to `true`/`false`, legacy `1`/`0` accepted with a warning;
+      invalid `Hidden` is treated as true (OPEN-4)
 
 ### §9 `Exec=` parsing
 
@@ -632,8 +634,8 @@ compat entries are unaffected, and importable moved 778 → 777.
 Only `true`/`false` are valid per the specification. Legacy `1`/`0` are
 accepted with a warning, since they were valid in an older revision and still
 appear in the wild. Anything else falls back to the key's default with a
-warning, matching GLib. See OPEN-4 for why the fallback direction is not
-always safe.
+warning, matching GLib — **except `Hidden`**. An unparsable `Hidden` value is
+treated as true (masking) so it cannot un-hide an entry. See OPEN-4.
 
 ### DEV-14 — Phase 5 may read `shortcuts.vdf`; it must not update it
 
@@ -655,7 +657,7 @@ deliberate.
 | OPEN-2 desktop ID collisions | medium | **resolved** — implemented |
 | OPEN-2a does a collision block import? | medium | **resolved** — implemented |
 | OPEN-3 Flatpak file-forwarding markers | medium | **resolved** — implemented + measured |
-| OPEN-4 malformed booleans | low | **open** — conservative `Hidden` policy needed before release |
+| OPEN-4 malformed booleans | low | **resolved** — invalid `Hidden` masks |
 | OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
 | OPEN-6 `LastPlayTime` for new shortcuts | low | **accepted** — `0` |
 | OPEN-7 shell quote-escaping in `Exec=` | medium | **contained** → DEV-9; entry refused, parser optional |
@@ -802,27 +804,27 @@ would be worse than an untouched one.
 Verified on the capture host: 0 of 804 entries retain a marker or the flag,
 and no launch vector produced a warning.
 
-### OPEN-4 — Invalid booleans fall back in an unsafe direction
+### ~~OPEN-4 — Invalid booleans fall back in an unsafe direction~~
 
-**Severity: low. Deliberately deferred, but must stay open: a conservative
-malformed-`Hidden` policy is required before release.**
+**Severity: low. Resolved: invalid `Hidden` is treated as true (masking).**
 
 `Terminal='False'` appears on the capture host (7 entries). Quoted values are
-invalid, so they fall back to the default. Here that happens to be correct,
-but `Hidden='True'` would fall back to `False` and un-mask an entry the
-packager intended to hide. §8 does not discuss invalid values.
+invalid. Cosmetic keys (`Terminal`, `NoDisplay`, `DBusActivatable`) still
+fall back to the key default, matching GLib. That remains correct for
+`Terminal='False'` → default false.
 
-Current behaviour is unchanged and matches GLib. That is fine for `Terminal`
-and `NoDisplay`, where a wrong fallback is cosmetic, but not for `Hidden`,
-which is a **masking** key: getting it wrong resurrects an entry someone
-deliberately hid, and the importer would then offer it for import.
+`Hidden` is a **masking** key. Defaulting an unparsable value to `false`
+would offer the entry for import and would not mask lower-priority copies.
+No malformed `Hidden` has been observed in the wild, so packager intent is
+unknown; the conservative choice is to treat any invalid value as hidden.
 
-The asymmetry to resolve before release: an unparsable `Hidden` value should
-probably be treated as masking, or at least as "do not offer for import",
-rather than silently defaulting to `False`. Not changed yet because no
-malformed `Hidden` has been observed in the wild, so there is no evidence for
-which direction real packagers intend. **Release gate: decide this
-explicitly; do not let the GLib default stand by omission.**
+- Absent `Hidden` stays false.
+- `true` / `false` / legacy `1` / `0` are unchanged.
+- Any other value, including `TRUE`, `False`, `'True'`, and `'False'`, is
+  hidden, with a warning. Discovery then masks the desktop ID (rule 3).
+
+Covered by `test_open_4_malformed_hidden_is_treated_as_masking` and
+`test_malformed_hidden_masks_lower_priority_copies`.
 
 ### OPEN-5 — "missing `TryExec`" is ambiguous in the Phase 1 fixture list
 
@@ -880,7 +882,7 @@ required before any of the first two can move out of "experimental". See
 | atomic-write failure-injection tests pass | **yes** — Phase 7, tmp copies |
 | native Steam end-to-end import passes | **yes** — Konsole on native Steam (Phase 10) |
 | unrelated shortcuts survive repeated imports | **yes** — 982/982 closed-Steam; 980/980 third-party after Steam loaded, kill, and re-import |
-| malformed-`Hidden` policy decided (OPEN-4) | **no** — must not ship by omission |
+| malformed-`Hidden` policy decided (OPEN-4) | **yes** — invalid `Hidden` is treated as true |
 | backups are recoverable | **yes** — Phase 7 timestamped copies; not crash-tested on real hardware |
 | unsigned 32-bit artwork naming confirmed | **yes** — 565/565 on real data |
 | SteamGridDB failures cannot corrupt Steam state | **yes** — Phase 8 client never writes Steam paths |

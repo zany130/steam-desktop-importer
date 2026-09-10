@@ -70,7 +70,8 @@ without an `Exec` fallback, all four `TryExec` states (absolute-present,
 bare-present, unresolvable, absent), `OnlyShowIn`/`NotShowIn`, localization
 with country and modifier variants, whitespace around `=`, Desktop Action
 groups that must not leak into the main group, a file with no
-`[Desktop Entry]` group, a file with no `Name`, and invalid boolean values.
+`[Desktop Entry]` group, a file with no `Name`, invalid boolean values, and
+a malformed `Hidden` that must mask (OPEN-4).
 
 ## `sources/`
 
@@ -112,7 +113,7 @@ IMPLEMENTATION.md §31 Phase 1 lists eleven required fixture cases:
 | Required | Provided by |
 | --- | --- |
 | user/system override | `xdg_precedence/` `org.example.Overridden.desktop` |
-| Hidden mask | `xdg_precedence/` `org.example.MaskedByUser.desktop`, `MaskedByLocal` |
+| Hidden mask | `xdg_precedence/` `org.example.MaskedByUser.desktop`, `MaskedByLocal`; malformed `Hidden` in `semantics-hidden-malformed.desktop` (OPEN-4) |
 | nested desktop ID | `xdg_precedence/.../nested/vendor/Deep.desktop` |
 | `%u`, `%U`, `%f`, `%F` | `exec-percent-u/-U/-f/-F` |
 | `%%` | `exec-percent-literal` |

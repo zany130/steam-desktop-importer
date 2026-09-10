@@ -8,8 +8,8 @@ IMPLEMENTATION.md §7. Three separate concerns, kept separate here:
 2. **Supplemental provider roots** (§7.2). Flatpak and snapd export
    directories, added only when they are not already reachable through XDG.
 3. **Precedence and masking** (§7.4). The first entry to claim a desktop ID
-   wins; ``Hidden=true`` masks the ID so that no lower-priority copy can
-   resurrect it.
+   wins; ``Hidden=true`` (and an invalid ``Hidden`` value, OPEN-4) masks the
+   ID so that no lower-priority copy can resurrect it.
 4. **Same-level ID collisions** (CHECKLIST OPEN-2). Precedence cannot separate
    two files in the *same* root that derive the same ID, so those are broken
    deterministically, reported, and held back from import.
