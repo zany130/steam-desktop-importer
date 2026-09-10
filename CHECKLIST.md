@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0, 1, 2, 3, 4 and 5 complete. 318 tests passing.**
+**Current state: Phases 0–6 complete. 347 tests passing.**
 No code in this repository writes to any Steam directory. The write-guard
 test still forbids Steam filesystem writes; the only allowlisted write is
 `Path.mkdir` in `state/store.py` for the importer's own SQLite directory.
@@ -95,10 +95,7 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `debug launch [desktop-id]` — Phase 2 vectors; never runs or writes
 - [x] `debug steam` — Phase 4 installations and accounts, plus §14 running status; read-only
 - [x] `debug identity` — Phase 5; never creates state or writes Steam
-- [ ] `debug dump-shortcuts` — needs Phase 6
-
-`debug dump-shortcuts` is deliberately absent rather than stubbed, so no
-command can appear to work while returning guessed data.
+- [x] `debug dump-shortcuts` — Phase 6; parsed VDF, never writes
 
 ## Phase 2 — Launch adapters (§10)
 
@@ -299,12 +296,52 @@ this importer has never written. Confirming the VDF row exists is Phase 6.
 ### Not yet done, and deliberately so
 
 Writing mappings after a successful import is Phase 7. Relink of a
-Possible Existing Match is Phase 6/7 UI. `debug dump-shortcuts` is Phase 6.
+Possible Existing Match as a GUI action is Phase 7.
+
+## Phase 6 — VDF read/update (§15–§17)
+
+Complete. Live Steam files are still never written. `ShortcutDocument.dumps()`
+returns bytes; tests serialize into tmp paths only.
+
+- [x] Binary load (`ShortcutDocument.load` / `loads`)
+- [x] Byte-identical load → dumps on every loadable fixture
+- [x] Preserve unknown fields, key casing, key order, and index holes
+- [x] Update by unsigned AppID; retain AppID
+- [x] New entries use the Steam-written fixture schema (`STEAM_NEW_ENTRY_KEYS`)
+- [x] `LastPlayTime = 0` on new entries (OPEN-6 accepted)
+- [x] `ShortcutPath` / `FlatpakAppID` left empty (TEST-003/004)
+- [x] Possible-match heuristic (name+exe, optional launch options); never auto-owns
+- [x] `debug dump-shortcuts`
+
+### Characterization (read-only, 2026-09-09)
+
+Live `shortcuts.vdf` (961 entries, 354854 bytes) was loaded and
+`dumps()`-ed in memory. The result was **byte-identical**. An in-memory
+rename left the on-disk mtime, size, and bytes unchanged.
+
+Three writer shapes are present:
+
+| Count | Keys | Notes |
+| --- | --- | --- |
+| 550 | 18, includes `sortas` | Steam-written (Phase 0) |
+| 233 | 17, no `sortas`, populated `tags` | earlier third-party tool |
+| 178 | 7: `LaunchOptions`, `StartDir`, `appid`, `appname`, `exe`, `icon`, `tags` | Steam ROM Manager batch; lowercase `appname`/`exe` |
+
+New importer entries still use the 18-key Steam-written fixture schema.
+Updates write through the existing key casing, so an SRM row is not
+rewritten into the Steam schema.
+
+Indices are `"0"`–`"960"` with no numeric holes; dict order after load is
+lexical (`"0"`, `"1"`, `"10"`, …). New entries append `max+1` and do not
+reorder.
+
+### Not yet done, and deliberately so
+
+Replacing the live file is Phase 7. The Import button stays disabled.
 
 ## Not started
 
-Phases 6–11, and §15 / §17–§30 in general except the Phase 5 read-only
-identity listing. Specifically **not** implemented, as instructed:
+Phases 7–11. Specifically **not** implemented, as instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
 - Any Flatpak permission modification (§11, rule 23)
@@ -508,7 +545,7 @@ deliberate.
 | OPEN-3 Flatpak file-forwarding markers | medium | **resolved** — implemented + measured |
 | OPEN-4 malformed booleans | low | **open** — conservative `Hidden` policy needed before release |
 | OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
-| OPEN-6 `LastPlayTime` for new shortcuts | low | default proposed |
+| OPEN-6 `LastPlayTime` for new shortcuts | low | **accepted** — `0` |
 | OPEN-7 shell quote-escaping in `Exec=` | medium | **contained** → DEV-9; entry refused, parser optional |
 
 ### ~~OPEN-1 — Single quotes~~
@@ -685,13 +722,14 @@ is absent or the binary is absent. Both fixtures exist
 differently: absent means availability is unknown and the entry stays
 importable; unresolvable marks it unavailable per §8.
 
-### OPEN-6 — `LastPlayTime` for new shortcuts is unspecified
+### ~~OPEN-6 — `LastPlayTime` for new shortcuts is unspecified~~
 
-**Severity: low. Phase 6. Proposed default accepted unless objected to:
-`LastPlayTime = 0` for newly created shortcuts, meaning never played.**
+**Severity: low. Accepted in Phase 6: `LastPlayTime = 0` for newly created
+shortcuts, meaning never played.**
 
 §15 lists the field but gives no value for newly created entries. Real entries
-carry both `0` and real timestamps.
+carry both `0` and real timestamps. The Steam-written fixture schema uses `0`,
+so new importer entries match that.
 
 ---
 
@@ -726,7 +764,7 @@ required before any of the first two can move out of "experimental". See
 | persistent identity/AppID tests pass | **yes** — Phase 5 |
 | AppID allocation collision tests pass | **yes** — Phase 5 |
 | desktop-ID collision tests pass | **yes** — see OPEN-2 |
-| VDF round-trip fixtures pass | fixtures exist; round-trip is Phase 6 |
+| VDF round-trip fixtures pass | **yes** — Phase 6; live file also byte-identical |
 | atomic-write failure-injection tests pass | not started (Phase 7) |
 | native Steam end-to-end import passes | not started (Phase 10) |
 | unrelated shortcuts survive repeated imports | not started (Phase 10) |

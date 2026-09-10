@@ -3,7 +3,7 @@
 IMPLEMENTATION.md §10. Parsing and Steam serialization are separate stages,
 and this module is neither. It turns a parsed application into the command
 Steam should run, and stops there. Nothing here writes to Steam; producing the
-actual ``shortcuts.vdf`` fields is Phase 6.
+actual ``shortcuts.vdf`` fields is Phase 6 (`ShortcutDocument`).
 
 Every adapter is *preserving* by default. The Desktop Entry already contains a
 working command, so the job is to carry it across faithfully rather than to

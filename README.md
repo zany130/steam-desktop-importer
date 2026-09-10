@@ -8,7 +8,7 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0, 1, 2, 3, 4 and 5 are implemented. Nothing else is.**
+**Phases 0–6 are implemented. Nothing else is.**
 
 The GUI writes only the importer's SQLite store. The Import button is
 visible and disabled. A test (`test_package_performs_no_filesystem_writes`)
@@ -24,7 +24,7 @@ allowlisted write is creating the state directory.
 | 3 | GUI | done |
 | 4 | Steam install/account discovery | done |
 | 5 | Persistent state and AppID allocation | done |
-| 6 | VDF read/update | fixtures + read-only identity listing |
+| 6 | VDF read/update | done (in-memory only; no live writes) |
 | 7 | Safe VDF commit | not started |
 | 8–11 | SteamGridDB, artwork UI, release gates | not started |
 
@@ -58,6 +58,9 @@ steam-desktop-importer debug steam
 
 # Show §6/§16 identity for one desktop ID. Never writes Steam or state.
 steam-desktop-importer debug identity org.kde.kate.desktop
+
+# Show parsed shortcuts.vdf. Read-only; never writes.
+steam-desktop-importer debug dump-shortcuts
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
@@ -90,6 +93,10 @@ Steam ROM Manager, not by this importer); none of those AppIDs collide with a
 first-import candidate, and none pair name+exe with a desktop entry, so
 Possible Existing Match is 0. `Imported` means managed in importer state,
 not verified in the VDF.
+
+Phase 6 can load, update by AppID, create a Steam-schema entry, and
+serialize binary KeyValues in memory. A no-op load/dumps of the live
+961-entry file is byte-identical. Replacing that file is still Phase 7.
 
 ## Development
 
