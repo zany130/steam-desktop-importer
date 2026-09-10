@@ -11,7 +11,9 @@ This module implements the key-file grammar directly:
 * ``string`` value escapes;
 * semicolon-separated lists with ``\\;`` escaping;
 * booleans restricted to ``true``/``false``, with legacy ``1``/``0`` accepted
-  leniently and anything else falling back to the default.
+  leniently. Invalid values fall back to the key's default, except
+  ``Hidden``, which is treated as true so a malformed mask cannot un-hide
+  an entry (OPEN-4).
 
 §8 permits "PyXDG or an equivalent Desktop Entry-aware library ... or an
 equivalently tested implementation". This is the latter. See CHECKLIST.md for
@@ -261,7 +263,21 @@ class DesktopEntryFile:
                 return unescape_entry_value(value)
         return None
 
-    def boolean(self, key: str, default: bool = False, group: str = MAIN_GROUP) -> bool:
+    def boolean(
+        self,
+        key: str,
+        default: bool = False,
+        group: str = MAIN_GROUP,
+        *,
+        invalid: bool | None = None,
+    ) -> bool:
+        """Parse a Desktop Entry boolean.
+
+        Valid values are ``true``/``false``. Legacy ``1``/``0`` are accepted
+        with a warning. Anything else is invalid: ``invalid`` is used when
+        given, otherwise ``default``. ``Hidden`` passes ``invalid=True`` so a
+        malformed value still masks (OPEN-4).
+        """
         value = self.raw(key, group)
         if value is None:
             return default
@@ -276,11 +292,12 @@ class DesktopEntryFile:
         if lowered in _LENIENT_FALSE:
             self.warnings.append(f"{key}={value!r} uses the legacy numeric boolean form")
             return False
+        chosen = default if invalid is None else invalid
         self.warnings.append(
             f"{key}={value!r} is not a valid boolean; only 'true' and 'false' are "
-            f"valid, so the default {default!r} is used"
+            f"valid, so {chosen!r} is used"
         )
-        return default
+        return chosen
 
     def string_list(self, key: str, group: str = MAIN_GROUP) -> list[str]:
         value = self.raw(key, group)
@@ -518,7 +535,7 @@ def parse_desktop_entry(
         try_exec=entry.string("TryExec"),
         terminal=entry.boolean("Terminal", default=False),
         dbus_activatable=entry.boolean("DBusActivatable", default=False),
-        hidden=entry.boolean("Hidden", default=False),
+        hidden=entry.boolean("Hidden", default=False, invalid=True),
         no_display=entry.boolean("NoDisplay", default=False),
         only_show_in=entry.string_list("OnlyShowIn"),
         not_show_in=entry.string_list("NotShowIn"),

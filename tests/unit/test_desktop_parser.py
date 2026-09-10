@@ -64,6 +64,12 @@ def test_boolean_parsing_rules(entry_semantics_dir):
     assert sum("legacy numeric boolean" in w for w in parsed.warnings) == 2
 
 
+def test_malformed_hidden_fixture_is_treated_as_masking(entry_semantics_dir):
+    parsed = parse_desktop_entry(entry_semantics_dir / "semantics-hidden-malformed.desktop")
+    assert parsed.hidden is True
+    assert any("not a valid boolean" in warning for warning in parsed.warnings)
+
+
 def test_duplicate_keys_keep_the_first_value(tmp_path):
     path = tmp_path / "dupe.desktop"
     path.write_text("[Desktop Entry]\nType=Application\nName=First\nName=Second\nExec=/bin/true\n")

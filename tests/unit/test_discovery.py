@@ -263,6 +263,24 @@ def test_unparsable_file_does_not_claim_the_id(tmp_path):
     assert result.errors[0][0] == high / "app.desktop"
 
 
+def test_malformed_hidden_masks_lower_priority_copies(tmp_path):
+    """OPEN-4: invalid Hidden is masking, not a claim that resurrects later."""
+    high = tmp_path / "high" / "applications"
+    low = tmp_path / "low" / "applications"
+    high.mkdir(parents=True)
+    low.mkdir(parents=True)
+    (high / "app.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=High\nExec=/bin/true\nHidden='True'\n"
+    )
+    (low / "app.desktop").write_text(
+        "[Desktop Entry]\nType=Application\nName=Low\nExec=/bin/true\n"
+    )
+    result = discover_applications(roots=roots_from([high, low]))
+    assert "app.desktop" not in result.applications
+    assert result.masked_ids["app.desktop"] == high / "app.desktop"
+    assert any(name == "app.desktop" for name, _path in result.shadowed)
+
+
 def test_non_desktop_files_are_ignored(tmp_path):
     root = tmp_path / "applications"
     root.mkdir()
