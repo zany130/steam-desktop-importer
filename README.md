@@ -8,13 +8,14 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0, 1, 2, 3, 4 and 5 are implemented. Nothing else is.**
+**Phases 0–7 are implemented.** SteamGridDB, artwork, and a live native
+end-to-end pass are not.
 
-The GUI writes only the importer's SQLite store. The Import button is
-visible and disabled. A test (`test_package_performs_no_filesystem_writes`)
-still enforces that nothing writes to a Steam directory, in line with the
-Phase 7 rule "do not enable live writes until this phase passes". The only
-allowlisted write is creating the state directory.
+The GUI can import selected applications into `shortcuts.vdf` when Steam is
+closed. Writes go through `steam/commit.py`: importer lock, backup, temp +
+fsync, parse-back, `os.replace`. A write-guard test allowlists only that
+module (plus creating the importer state directory). Debug commands stay
+read-only.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -24,8 +25,8 @@ allowlisted write is creating the state directory.
 | 3 | GUI | done |
 | 4 | Steam install/account discovery | done |
 | 5 | Persistent state and AppID allocation | done |
-| 6 | VDF read/update | fixtures + read-only identity listing |
-| 7 | Safe VDF commit | not started |
+| 6 | VDF read/update | done |
+| 7 | Safe VDF commit | done |
 | 8–11 | SteamGridDB, artwork UI, release gates | not started |
 
 See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
@@ -34,7 +35,7 @@ open issues.
 ## What works today
 
 ```bash
-# Open the GUI (read-only; Import is disabled).
+# Open the GUI. Import writes shortcuts.vdf only while Steam is closed.
 steam-desktop-importer
 
 # Show the ordered applications/ roots that will be scanned.
@@ -58,6 +59,9 @@ steam-desktop-importer debug steam
 
 # Show §6/§16 identity for one desktop ID. Never writes Steam or state.
 steam-desktop-importer debug identity org.kde.kate.desktop
+
+# Show parsed shortcuts.vdf. Read-only; never writes.
+steam-desktop-importer debug dump-shortcuts
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
@@ -88,8 +92,13 @@ all 804 resolved entries as New. The live `shortcuts.vdf` now has 961
 identities (Phase 0 recorded 783; the added shortcuts were created with
 Steam ROM Manager, not by this importer); none of those AppIDs collide with a
 first-import candidate, and none pair name+exe with a desktop entry, so
-Possible Existing Match is 0. `Imported` means managed in importer state,
-not verified in the VDF.
+Possible Existing Match is 0. `Imported` means managed in importer state.
+A successful import writes the VDF first, then the mapping.
+
+Phase 6 can load, update by AppID, create a Steam-schema entry, and
+serialize binary KeyValues in memory. A no-op load/dumps of the live
+961-entry file is byte-identical. Phase 7 replaces a target file through
+the atomic transaction; tests use tmp copies, not this host's live VDF.
 
 ## Development
 

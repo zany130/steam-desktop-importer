@@ -4,16 +4,15 @@ IMPLEMENTATION.md §33 asks for project-native debug tooling "rather than
 ad-hoc scripts that guess the first userdata directory".
 
 Implemented: ``debug roots``, ``debug scan``, ``debug desktop-entry``,
-``debug launch``, ``debug steam`` and ``debug identity``.
-``debug dump-shortcuts`` still needs Phase 6 and is deliberately absent
-rather than stubbed.
+``debug launch``, ``debug steam``, ``debug identity`` and
+``debug dump-shortcuts``.
 
 ``debug launch`` prints the command a shortcut *would* use. It never executes
 it and never writes to Steam. ``debug steam`` reads Steam's configuration and
 never writes to it.
 
-With no subcommand the PySide6 GUI starts. It is also read-only: the Import
-button is present and disabled.
+With no subcommand the PySide6 GUI starts. Import writes ``shortcuts.vdf``
+only through the Phase 7 transaction, and only while Steam is closed.
 """
 
 from __future__ import annotations
@@ -38,6 +37,7 @@ from .state import (
     import_status,
 )
 from .steam import (
+    ShortcutDocument,
     allocate_appid,
     detect_steam_running,
     discover_accounts,
@@ -357,6 +357,68 @@ def _print_identity(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_dump_shortcuts(args: argparse.Namespace) -> int:
+    """Show parsed shortcuts.vdf without mutation (§33)."""
+    store = StateStore(default_state_path(), create=False)
+    installations = discover_installations()
+    installation_selection = select_installation(
+        installations,
+        remembered_key=args.steam_installation or store.remembered_installation(),
+    )
+    installation = installation_selection.selected
+    if installation is None:
+        print("error: no Steam installation found", file=sys.stderr)
+        store.close()
+        return 1
+    if not installation_selection.is_resolved and args.steam_installation is None:
+        print(
+            f"warning: installation is an unconfirmed preselection ({installation_selection.reason})",
+            file=sys.stderr,
+        )
+
+    accounts = discover_accounts(installation)
+    remembered = None
+    if args.account is not None:
+        remembered = args.account
+    else:
+        remembered = store.remembered_account(installation.key)
+    account_selection = select_account(accounts, remembered_account_id32=remembered)
+    account = account_selection.selected
+    store.close()
+    if account is None:
+        print("error: no Steam account found", file=sys.stderr)
+        return 1
+    if not account_selection.is_resolved and args.account is None:
+        print(
+            f"warning: account is an unconfirmed preselection ({account_selection.reason})",
+            file=sys.stderr,
+        )
+
+    path = shortcuts_vdf_path(account)
+    print(f"installation        {installation.key}")
+    print(f"account             {account.account_id32}")
+    print(f"shortcuts.vdf       {path}")
+    try:
+        document = ShortcutDocument.load(path)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+    entries = document.entries()
+    print(f"indices             {document.indices()}")
+    print(f"shortcuts           {len(entries)}")
+    for entry in entries:
+        print(f"[{entry.index}]")
+        print(f"    appid unsigned  {entry.appid_unsigned} (0x{entry.appid_unsigned:08x})")
+        print(f"    AppName         {entry.name}")
+        print(f"    Exe             {entry.exe}")
+        print(f"    StartDir        {entry.start_dir or '(empty)'}")
+        print(f"    LaunchOptions   {entry.launch_options or '(empty)'}")
+        if entry.extra_keys:
+            print(f"    extra keys      {list(entry.extra_keys)}")
+    return 0
+
+
 def _print_launch(args: argparse.Namespace) -> int:
     """Show launch vectors for discovered entries, without writing Steam."""
     result = discover_applications()
@@ -413,7 +475,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="steam-desktop-importer",
         description="Import .desktop applications into Steam as non-Steam shortcuts. "
-        "With no subcommand, opens the GUI. Nothing writes to Steam.",
+        "With no subcommand, opens the GUI. Debug commands never write to Steam.",
     )
     subcommands = parser.add_subparsers(dest="command", required=False)
     parser.set_defaults(func=_run_gui)
@@ -461,6 +523,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     identity.add_argument("desktop_id")
     identity.set_defaults(func=_print_identity)
+
+    dump = debug_commands.add_parser(
+        "dump-shortcuts",
+        help="show parsed shortcuts.vdf (Phase 6); read-only, never writes",
+    )
+    dump.add_argument("--steam-installation", help="SteamInstallation.key")
+    dump.add_argument("--account", type=int, help="32-bit Steam account ID")
+    dump.set_defaults(func=_print_dump_shortcuts)
 
     return parser
 

@@ -2,10 +2,12 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0, 1, 2, 3, 4 and 5 complete. 318 tests passing.**
-No code in this repository writes to any Steam directory. The write-guard
-test still forbids Steam filesystem writes; the only allowlisted write is
-`Path.mkdir` in `state/store.py` for the importer's own SQLite directory.
+**Current state: Phases 0–7 complete. 376 tests passing.**
+Live `shortcuts.vdf` writes exist only in `steam/commit.py`, behind an
+importer lock, Steam-closed probe, same-directory temp, fsync, parse-back,
+backup, and `os.replace`. Tests exercise that path on tmp copies, not the
+host Steam userdata. The write-guard allowlists those calls in `commit.py`
+plus `Path.mkdir` in `state/store.py`.
 
 Legend: `[x]` done · `[ ]` not started · `[~]` partial
 
@@ -95,10 +97,7 @@ read-only, using `scripts/characterize_shortcuts.py`. Findings are in
 - [x] `debug launch [desktop-id]` — Phase 2 vectors; never runs or writes
 - [x] `debug steam` — Phase 4 installations and accounts, plus §14 running status; read-only
 - [x] `debug identity` — Phase 5; never creates state or writes Steam
-- [ ] `debug dump-shortcuts` — needs Phase 6
-
-`debug dump-shortcuts` is deliberately absent rather than stubbed, so no
-command can appear to work while returning guessed data.
+- [x] `debug dump-shortcuts` — Phase 6; parsed VDF, never writes
 
 ## Phase 2 — Launch adapters (§10)
 
@@ -142,9 +141,10 @@ a transient AppImage in the wild.
 
 ## Phase 3 — Basic GUI (§25)
 
-Complete, and still read-only. `steam-desktop-importer` with no subcommand
-opens the window. The Import button is present and disabled: selection has to
-be exercisable, but writing `shortcuts.vdf` is Phase 7.
+Complete. `steam-desktop-importer` with no subcommand opens the window.
+Import and Relink are enabled only when Steam is closed (or the probe is
+certain), an installation and account are selected, and matching rows are
+ticked.
 
 - [x] `QTableView` + `QAbstractTableModel` + `QSortFilterProxyModel` (§25.3)
 - [x] Columns: selection, icon, name, source, command, desktop ID, status,
@@ -153,7 +153,7 @@ be exercisable, but writing `shortcuts.vdf` is Phase 7.
 - [x] Text search, source type, NoDisplay, unsupported, current-desktop
 - [x] Steam installation selector; several start on a placeholder (rule 7)
 - [x] Steam account selector; several require the confirmation dialog (rule 8)
-- [x] Steam running indicator (§14), used for display only
+- [x] Steam running indicator (§14), used for display and to gate writes
 - [x] Refresh off the GUI thread (`QThreadPool` / `QRunnable`, §25.4)
 - [x] Settings control that does not pretend later phases exist
 - [x] Desktop-ID collision acknowledgement (session-only in Phase 3; persisted in Phase 5)
@@ -234,16 +234,16 @@ all three hints present, resolved without a prompt.
 the chosen installation to be remembered. Phase 5 now stores both.
 
 `§14 Steam running detection` is implemented for the Phase 3 indicator
-(DEV-13). Using it to block a VDF write remains Phase 7.
+(DEV-13) and Phase 7 uses it to block a VDF write, including an uncertain
+negative.
 
 ## Phase 5 — Persistent state and AppID allocation (§6, §16, §25.1)
 
-Complete. Steam filesystem writes remain disabled. The store writes only
+Complete. The store writes only
 `$XDG_STATE_HOME/steam-desktop-importer/state.sqlite3` (fallback
 `~/.local/state/...`). GUI and `save_mapping` never allocate-and-insert in
 one step: §27 requires the VDF commit first, so mappings are persisted only
-when a caller means to. Phase 7 will insert after a successful VDF write.
-Scanning does **not** create mappings.
+after a successful Phase 7 write. Scanning does **not** create mappings.
 
 - [x] SQLite store with the §6 fields and identity
       `(steam_installation_key, steam_account_id32, desktop_id)`
@@ -292,23 +292,96 @@ shortcut identities. VDF update/serialize is Phase 6. Phase 5 therefore
 lists identities read-only (`rb` + `vdf.binary_load`) and takes an explicit
 occupied set. An unparsable file is an error, not an empty occupied set.
 
-`Imported` means *managed in importer state*, not *verified present in the
-VDF*. On a fresh store every scoped application is `New`. That is honest:
-this importer has never written. Confirming the VDF row exists is Phase 6.
+`Imported` means *managed in importer state*. A successful Phase 7 import
+writes the VDF row first, then the mapping; a crash between those steps can
+still leave an unmanaged VDF entry (§27).
 
 ### Not yet done, and deliberately so
 
-Writing mappings after a successful import is Phase 7. Relink of a
-Possible Existing Match is Phase 6/7 UI. `debug dump-shortcuts` is Phase 6.
+Artwork, SteamGridDB, and native end-to-end against a live Steam account
+remain later phases.
+
+## Phase 6 — VDF read/update (§15–§17)
+
+Complete. `ShortcutDocument.dumps()` returns bytes. Replacing a live file
+is Phase 7 (`commit_shortcuts`).
+
+- [x] Binary load (`ShortcutDocument.load` / `loads`)
+- [x] Byte-identical load → dumps on every loadable fixture
+- [x] Preserve unknown fields, key casing, key order, and index holes
+- [x] Update by unsigned AppID; retain AppID
+- [x] New entries use the Steam-written fixture schema (`STEAM_NEW_ENTRY_KEYS`)
+- [x] `LastPlayTime = 0` on new entries (OPEN-6 accepted)
+- [x] `ShortcutPath` / `FlatpakAppID` left empty (TEST-003/004)
+- [x] Possible-match heuristic (name+exe, optional launch options); never auto-owns
+- [x] `debug dump-shortcuts`
+
+### Characterization (read-only, 2026-09-09)
+
+Live `shortcuts.vdf` (961 entries, 354854 bytes) was loaded and
+`dumps()`-ed in memory. The result was **byte-identical**. An in-memory
+rename left the on-disk mtime, size, and bytes unchanged.
+
+Three writer shapes are present:
+
+| Count | Keys | Notes |
+| --- | --- | --- |
+| 550 | 18, includes `sortas` | Steam-written (Phase 0) |
+| 233 | 17, no `sortas`, populated `tags` | earlier third-party tool |
+| 178 | 7: `LaunchOptions`, `StartDir`, `appid`, `appname`, `exe`, `icon`, `tags` | Steam ROM Manager batch; lowercase `appname`/`exe` |
+
+New importer entries still use the 18-key Steam-written fixture schema.
+Updates write through the existing key casing, so an SRM row is not
+rewritten into the Steam schema.
+
+Indices are `"0"`–`"960"` with no numeric holes; dict order after load is
+lexical (`"0"`, `"1"`, `"10"`, …). New entries append `max+1` and do not
+reorder.
+
+### Not yet done, and deliberately so
+
+Replacing the live file is Phase 7, implemented on tmp copies and through
+the GUI only when Steam is closed.
+
+## Phase 7 — Safe VDF commit (§18, §26–§27)
+
+Complete. The live host `shortcuts.vdf` was **not** used as a write target
+during implementation; failure-injection and import tests use tmp directories.
+
+A copy of the current live file (979 entries, 396726 bytes) was committed
+in `/tmp` with a rename of one entry: backup bytes matched the original,
+the temp copy updated, and the real userdata mtime/size/bytes were unchanged.
+
+- [x] Per-file advisory importer lock (`shortcuts.vdf.lock`, `LOCK_EX | LOCK_NB`)
+- [x] Steam-closed gate, including an uncertain probe
+- [x] Timestamped backups in the same directory, collision-safe names
+- [x] Bounded backup history (`MAX_BACKUPS = 10`)
+- [x] Same-directory temp, flush, fsync
+- [x] Parse-back validation before replace
+- [x] Final Steam recheck
+- [x] `os.replace` + parent-directory fsync
+- [x] Failure-injection: crash after serialize, validation failure, crash
+      before replace, replace failure, concurrent importer, Steam starts
+      during the transaction
+- [x] Stale-document check (`original_bytes`)
+- [x] Import applies New/Changed/Imported; Possible Existing Match is relink
+      only
+- [x] Mappings persisted only after a successful VDF commit
+- [x] Import / Relink buttons gated on Steam closed + selected target
+
+### Not written, on purpose
+
+- The development host's real `shortcuts.vdf` (961 entries)
+- Artwork / grid files (Phase 8–9)
+- Collections (§24)
 
 ## Not started
 
-Phases 6–11, and §15 / §17–§30 in general except the Phase 5 read-only
-identity listing. Specifically **not** implemented, as instructed:
+Phases 8–11. Specifically **not** implemented, as instructed:
 
 - Steam collections/categories (§24, rule 20) — out of scope for MVP
 - Any Flatpak permission modification (§11, rule 23)
-- Any live `shortcuts.vdf` write (rule 15, Phase 7 gate)
+- SteamGridDB and artwork commit
 
 ---
 
@@ -508,7 +581,7 @@ deliberate.
 | OPEN-3 Flatpak file-forwarding markers | medium | **resolved** — implemented + measured |
 | OPEN-4 malformed booleans | low | **open** — conservative `Hidden` policy needed before release |
 | OPEN-5 "missing TryExec" ambiguity | low | **resolved** — both readings covered |
-| OPEN-6 `LastPlayTime` for new shortcuts | low | default proposed |
+| OPEN-6 `LastPlayTime` for new shortcuts | low | **accepted** — `0` |
 | OPEN-7 shell quote-escaping in `Exec=` | medium | **contained** → DEV-9; entry refused, parser optional |
 
 ### ~~OPEN-1 — Single quotes~~
@@ -685,13 +758,14 @@ is absent or the binary is absent. Both fixtures exist
 differently: absent means availability is unknown and the entry stays
 importable; unresolvable marks it unavailable per §8.
 
-### OPEN-6 — `LastPlayTime` for new shortcuts is unspecified
+### ~~OPEN-6 — `LastPlayTime` for new shortcuts is unspecified~~
 
-**Severity: low. Phase 6. Proposed default accepted unless objected to:
-`LastPlayTime = 0` for newly created shortcuts, meaning never played.**
+**Severity: low. Accepted in Phase 6: `LastPlayTime = 0` for newly created
+shortcuts, meaning never played.**
 
 §15 lists the field but gives no value for newly created entries. Real entries
-carry both `0` and real timestamps.
+carry both `0` and real timestamps. The Steam-written fixture schema uses `0`,
+so new importer entries match that.
 
 ---
 
@@ -726,11 +800,11 @@ required before any of the first two can move out of "experimental". See
 | persistent identity/AppID tests pass | **yes** — Phase 5 |
 | AppID allocation collision tests pass | **yes** — Phase 5 |
 | desktop-ID collision tests pass | **yes** — see OPEN-2 |
-| VDF round-trip fixtures pass | fixtures exist; round-trip is Phase 6 |
-| atomic-write failure-injection tests pass | not started (Phase 7) |
+| VDF round-trip fixtures pass | **yes** — Phase 6; live file also byte-identical |
+| atomic-write failure-injection tests pass | **yes** — Phase 7, tmp copies |
 | native Steam end-to-end import passes | not started (Phase 10) |
 | unrelated shortcuts survive repeated imports | not started (Phase 10) |
 | malformed-`Hidden` policy decided (OPEN-4) | **no** — must not ship by omission |
-| backups are recoverable | not started (Phase 7) |
+| backups are recoverable | **yes** — Phase 7 timestamped copies; not crash-tested on real hardware |
 | unsigned 32-bit artwork naming confirmed | **yes** — 565/565 on real data |
 | SteamGridDB failures cannot corrupt Steam state | not started (Phase 8) |

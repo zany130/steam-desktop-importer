@@ -22,8 +22,9 @@ remembered in the SQLite store, not in this dialog.</p>
 <li>Several installations or accounts are never chosen silently.</li>
 <li>SteamGridDB is Phase 8; there is no API-key field here because it
 would not do anything.</li>
-<li>No code path writes to <code>shortcuts.vdf</code>. Importing is
-Phase 7.</li>
+<li>Writes to <code>shortcuts.vdf</code> use the Phase 7 transaction
+(lock, backup, fsync, parse-back, replace) and require Steam to be
+closed.</li>
 </ul>
 """
 

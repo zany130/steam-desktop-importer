@@ -1,12 +1,11 @@
 """Steam running detection.
 
-IMPLEMENTATION.md §14. Detection is read-only and lives here because §25.1's
-main window needs a Steam status indicator. **Using it to gate writes is
-Phase 7**, and nothing in this module performs or authorises a write.
+IMPLEMENTATION.md §14. Detection itself is read-only. Phase 7 uses
+:func:`steam_allows_write` to gate ``shortcuts.vdf`` commits: a conservative
+false positive is preferable to writing while Steam is running.
 
 §14 asks for detection "based on more than only ``name == 'steam'`` where
-practical", and states that a conservative false positive is preferable to
-writing while Steam is running. Both shape the implementation:
+practical". Both shape the implementation:
 
 * several independent signals are checked, not just the process name;
 * anything ambiguous resolves to "running";
@@ -20,7 +19,7 @@ from dataclasses import dataclass, field
 
 import psutil
 
-__all__ = ["SteamRunningStatus", "detect_steam_running"]
+__all__ = ["SteamRunningStatus", "detect_steam_running", "steam_allows_write"]
 
 # Matched against the process name, case-insensitively and exactly. "steam" on
 # its own is deliberately included, but it is never the only signal consulted.
@@ -66,6 +65,16 @@ class SteamRunningStatus:
         is the one result callers must not act on blindly.
         """
         return self.running or self.inspection_failures == 0
+
+
+def steam_allows_write(status: SteamRunningStatus) -> bool:
+    """Whether a VDF write may proceed given this probe result.
+
+    Running Steam is an absolute block (rule 15). An uncertain *negative*
+    (unreadable processes, nothing matched) is also a block: §14 prefers a
+    conservative false positive over writing while Steam might be running.
+    """
+    return (not status.running) and status.is_certain
 
 
 def _matches(process: psutil.Process) -> str | None:

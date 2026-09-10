@@ -4,8 +4,9 @@ These tests do not exercise importer code. They assert that the committed
 fixtures really have the properties that docs/PHASE0_FORMAT_CHARACTERIZATION.md
 claims, so that later phases are built against an accurate model.
 
-They also enforce the Phase 7 gate: nothing in this repository may write to a
-Steam directory yet.
+They also enforce that Steam filesystem writes live only in
+``steam/commit.py`` (Phase 7 transaction), plus ``Path.mkdir`` for the
+importer state directory.
 """
 
 from __future__ import annotations
@@ -273,21 +274,29 @@ def _write_calls(tree: ast.AST) -> list[str]:
     return found
 
 
-# Phase 5 may create the importer state directory. Steam paths stay forbidden.
-# Adding a Steam write requires a new, reviewed allowlist entry — do not
-# broaden this set to land Phase 7 by accident.
+# Phase 5 may create the importer state directory. Phase 7 may replace a
+# shortcuts.vdf through steam/commit.py only: same-directory temp, fsync,
+# backup copy, os.replace, leftover-temp/backup pruning. Do not copy this
+# allowlist into other modules.
 _WRITE_ALLOWED = {
     "state/store.py": {"mkdir"},
+    "steam/commit.py": {
+        "mkdir",
+        "os.replace",
+        "os.fsync",
+        "os.write",
+        "os.unlink",
+        "shutil.copy2",
+    },
 }
 
 
 @pytest.mark.parametrize("module", sorted(SRC.rglob("*.py")), ids=lambda p: p.name)
 def test_package_performs_no_filesystem_writes(module):
-    """Phase 7: "Do not enable live writes until this phase passes."
+    """Phase 7: Steam writes exist only in ``steam/commit.py``.
 
-    The only allowed write is ``Path.mkdir`` for the Phase 5 state directory.
-    Nothing may write to a Steam path. Relaxing this further for the Phase 7
-    VDF transaction must be a deliberate, reviewed change.
+    The state store may create its own directory. The VDF transaction is
+    allowlisted per call, not by silencing this test.
     """
     tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
     found = _write_calls(tree)

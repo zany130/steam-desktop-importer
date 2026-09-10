@@ -1,6 +1,6 @@
 """Steam running detection (IMPLEMENTATION.md §14).
 
-Used by the Phase 3 status indicator. Gating writes on this result is Phase 7.
+Used by the status indicator and by Phase 7 to gate VDF writes.
 """
 
 from __future__ import annotations

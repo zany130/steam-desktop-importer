@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from steam_desktop_importer.models import (
     DesktopApplication,
@@ -13,8 +13,12 @@ from steam_desktop_importer.models import (
     SteamInstallation,
     UnsupportedCode,
 )
-from steam_desktop_importer.state import STATUS_NEW, StateStore
+from steam_desktop_importer.state import STATUS_IMPORTED, STATUS_NEW, StateStore
 from steam_desktop_importer.steam import AccountSelection
+from steam_desktop_importer.steam.appid import first_import_candidate
+from steam_desktop_importer.steam.running import SteamRunningStatus
+from steam_desktop_importer.steam.shortcut_identities import shortcuts_vdf_path
+from steam_desktop_importer.steam.shortcuts import ShortcutDocument
 from steam_desktop_importer.ui.account_dialog import AccountDialog
 from steam_desktop_importer.ui.main_window import MainWindow
 from steam_desktop_importer.ui.models import Column
@@ -40,7 +44,8 @@ def test_window_constructs_without_scanning(qapp):
     window = _window()
     assert window.windowTitle() == "Steam Desktop Importer"
     assert window.import_button.isEnabled() is False
-    assert "Phase 7" in window.import_button.toolTip()
+    assert window.relink_button.isEnabled() is False
+    assert "Steam" in window.import_button.toolTip()
     assert window.imported_filter.isEnabled() is True
     window.close()
 
@@ -282,4 +287,116 @@ def test_scoped_rows_are_new_on_a_fresh_store(qapp, tmp_path):
     window._model.set_applications([app])
     window._fill_installations()
     assert window._model.rows()[0].import_status == STATUS_NEW
+    window.close()
+
+
+CLOSED = SteamRunningStatus(running=False, evidence=(), inspection_failures=0)
+
+
+def _gui_app(path: Path) -> DesktopApplication:
+    path.write_text(
+        "[Desktop Entry]\nType=Application\nName=Example\nExec=/usr/bin/example\n",
+        encoding="utf-8",
+    )
+    return DesktopApplication(
+        desktop_id="org.example.App.desktop",
+        desktop_path=path,
+        name="Example",
+        localized_name=None,
+        raw_exec="/usr/bin/example",
+        exec_argv=["/usr/bin/example"],
+        icon_name=None,
+        icon_source_path=None,
+        working_directory=None,
+        try_exec=None,
+        terminal=False,
+        dbus_activatable=False,
+        hidden=False,
+        no_display=False,
+        only_show_in=[],
+        not_show_in=[],
+        source_kind="native",
+        flatpak_id=None,
+        snap_instance=None,
+        supported_for_import=True,
+        unsupported_reason=None,
+    )
+
+
+def test_import_stays_disabled_while_steam_is_running(qapp, tmp_path):
+    window = _window()
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    window._model.set_applications([_gui_app(tmp_path / "org.example.App.desktop")])
+    window._model.set_all_selected(True)
+    window._running = SteamRunningStatus(
+        running=True, evidence=("process name 'steam'",), inspection_failures=0
+    )
+    window._update_import_actions()
+    assert window.import_button.isEnabled() is False
+    assert "Close Steam" in window.import_button.toolTip()
+    window.close()
+
+
+def test_import_selected_commits_vdf_and_state(qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+    store = StateStore(":memory:")
+    window = MainWindow(
+        auto_refresh=False,
+        state_store=store,
+        detect_steam=lambda: CLOSED,
+    )
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    window._model.set_applications([app])
+    window._refresh_import_statuses()
+    window._model.set_all_selected(True)
+    window._running = CLOSED
+    window._update_import_actions()
+    assert window.import_button.isEnabled() is True
+    monkeypatch.setattr(window, "_confirm_write", lambda *_args, **_kwargs: True)
+    window._import_selected()
+    vdf = shortcuts_vdf_path(account)
+    entry = ShortcutDocument.load(vdf).find_by_appid(first_import_candidate(app.desktop_id))
+    assert entry is not None
+    assert entry.name == "Example"
+    mapping = store.get_mapping(installation.key, account.account_id32, app.desktop_id)
+    assert mapping is not None
+    assert window._model.rows()[0].import_status == STATUS_IMPORTED
     window.close()

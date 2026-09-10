@@ -6,11 +6,9 @@ the capture host resolves 804 entries, and per-cell widgets at that size make
 filtering and sorting noticeably slow.
 
 Import status is a Phase 5 classification against the SQLite store and an
-optional read-only listing of existing ``shortcuts.vdf`` identities.
-``Imported`` means *managed in importer state*, not *verified present in
-the VDF* (that confirmation is Phase 6). Icons are resolved lazily and
-cached, because theme lookup for 800 entries costs far more than drawing
-them.
+optional listing of existing ``shortcuts.vdf`` identities. ``Imported``
+means *managed in importer state*. Icons are resolved lazily and cached,
+because theme lookup for 800 entries costs far more than drawing them.
 """
 
 from __future__ import annotations
@@ -170,6 +168,9 @@ class ApplicationTableModel(QAbstractTableModel):
 
     def row_at(self, source_row: int) -> Row:
         return self._rows[source_row]
+
+    def selected_rows(self) -> list[Row]:
+        return [row for row in self._rows if row.selected]
 
     def selected_applications(self) -> list[DesktopApplication]:
         return [row.app for row in self._rows if row.selected]
