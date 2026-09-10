@@ -8,10 +8,13 @@ the shortcut unmanaged (§27).
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 from ..models import DesktopApplication
-from ..steam.shortcut_identities import ExistingShortcut, normalize_exe
 from .store import ManagedMapping, StateStore
+
+if TYPE_CHECKING:
+    from ..steam.shortcut_identities import ExistingShortcut
 
 __all__ = [
     "STATUS_CHANGED",
@@ -51,6 +54,8 @@ def likely_existing_match(app: DesktopApplication, shortcut: ExistingShortcut) -
     """
     if current_name(app) != shortcut.name:
         return False
+    from ..steam.shortcut_identities import normalize_exe
+
     app_exe = normalize_exe(app.exec_argv[0] if app.exec_argv else "")
     if not app_exe or normalize_exe(shortcut.exe) != app_exe:
         return False

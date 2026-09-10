@@ -90,6 +90,27 @@ def test_remembered_installation_and_per_install_account():
         assert store.remembered_installation() == "flatpak:/b"
 
 
+def test_steam_poll_preferences_default_and_round_trip():
+    from steam_desktop_importer.state import (
+        DEFAULT_STEAM_POLL_MS,
+        MAX_STEAM_POLL_MS,
+        MIN_STEAM_POLL_MS,
+        clamp_steam_poll_ms,
+    )
+
+    assert clamp_steam_poll_ms(0) == MIN_STEAM_POLL_MS
+    assert clamp_steam_poll_ms(999_999) == MAX_STEAM_POLL_MS
+    with StateStore(":memory:") as store:
+        assert store.steam_poll_enabled() is True
+        assert store.steam_poll_ms() == DEFAULT_STEAM_POLL_MS
+        store.set_steam_poll(enabled=False, interval_ms=5000)
+        assert store.steam_poll_enabled() is False
+        assert store.steam_poll_ms() == 5000
+        store.set_steam_poll(enabled=True, interval_ms=50)
+        assert store.steam_poll_enabled() is True
+        assert store.steam_poll_ms() == MIN_STEAM_POLL_MS
+
+
 def test_collision_acknowledgements_are_bound_to_the_physical_winner(tmp_path):
     winner = tmp_path / "vendor-app.desktop"
     other = tmp_path / "vendor" / "app.desktop"

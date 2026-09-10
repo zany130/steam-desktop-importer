@@ -1,16 +1,21 @@
-"""Main window (IMPLEMENTATION.md §25, Phases 3–7).
+"""Main window (IMPLEMENTATION.md §25, Phases 3–9).
 
-Import and Relink commit ``shortcuts.vdf`` through the Phase 7 transaction.
-They stay disabled while Steam is running, the probe is uncertain, or no
-installation+account is selected.
+Import and Relink commit ``shortcuts.vdf`` through the Phase 7 transaction,
+then place selected SteamGridDB artwork under ``config/grid/``. They stay
+disabled while Steam is running, the probe is uncertain, or no
+installation+account is selected, unless Steam-running detection is
+overridden for a false positive. Running status is polled while the window
+is open, and is re-checked when Import or Relink is clicked.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+import tempfile
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QThreadPool
+from PySide6.QtCore import QSize, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -33,8 +38,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..desktop.discovery import DiscoveryResult
-from ..models import SOURCE_KINDS, SteamAccount, SteamInstallation, UnsupportedCode
+from ..models import SOURCE_KINDS, DesktopApplication, SteamAccount, SteamInstallation, UnsupportedCode
 from ..state import (
+    DEFAULT_STEAM_POLL_MS,
     STATUS_CHANGED,
     STATUS_IMPORTED,
     STATUS_NEW,
@@ -50,6 +56,7 @@ from ..steam import (
     CommitError,
     CommitHooks,
     ImportPlanningError,
+    ImportResult,
     apply_applications,
     detect_steam_running,
     first_import_candidate,
@@ -61,18 +68,23 @@ from ..steam import (
     steam_allows_write,
 )
 from ..steam.running import SteamRunningStatus
+from ..steamgriddb.auth import resolve_api_key
 from .account_dialog import AccountDialog
+from .artwork_dialog import ACTION_SKIP_REMAINING, ACTION_USE, ArtworkDialog
 from .delegates import source_badge_delegate, status_badge_delegate
 from .models import ApplicationFilterProxy, ApplicationTableModel, Column
 from .settings_dialog import SettingsDialog
 from .workers import (
+    CallableWorker,
     ScanWorker,
     SteamProbeWorker,
     account_label,
     installation_label,
 )
 
-__all__ = ["MainWindow", "current_desktops", "run_app"]
+__all__ = ["MainWindow", "STEAM_POLL_MS", "current_desktops", "run_app"]
+
+STEAM_POLL_MS = DEFAULT_STEAM_POLL_MS
 
 _SOURCE_ALL = "all sources"
 _PLACEHOLDER_INSTALL = "Select a Steam installation…"
@@ -126,7 +138,12 @@ class MainWindow(QMainWindow):
         self._shortcuts_error: str | None = None
         self._scan_busy = False
         self._steam_busy = False
+        self._running_poll_busy = False
         self._account_prompted = False
+        self._auto_refresh = auto_refresh
+        self._steam_poll = QTimer(self)
+        self._steam_poll.setInterval(self._store.steam_poll_ms())
+        self._steam_poll.timeout.connect(self._poll_steam_running)
 
         self._model = ApplicationTableModel(self)
         self._proxy = ApplicationFilterProxy(self)
@@ -146,6 +163,7 @@ class MainWindow(QMainWindow):
 
         if auto_refresh:
             self.refresh()
+            self._apply_steam_poll_settings()
 
     # -- construction ---------------------------------------------------
 
@@ -397,14 +415,52 @@ class MainWindow(QMainWindow):
 
     def _on_steam_finished(self, pairs: object, running: object) -> None:
         self._steam_busy = False
-        if not isinstance(running, SteamRunningStatus):
-            return
-        self._running = running
-        self._set_steam_status(running)
+        if isinstance(running, SteamRunningStatus):
+            self._apply_running_status(running)
         if not isinstance(pairs, list):
             return
         self._installations = pairs
         self._fill_installations()
+
+    def _poll_steam_running(self) -> None:
+        """Re-check Steam without rediscovering installations (no combo flicker)."""
+        if not self._steam_checks_enabled() or self._running_poll_busy or self._steam_busy:
+            return
+        self._running_poll_busy = True
+        detect = self._detect_steam
+        worker = CallableWorker(detect)
+        worker.signals.finished.connect(self._on_running_poll)
+        worker.signals.failed.connect(self._on_running_poll_failed)
+        self._pool.start(worker)
+
+    def _on_running_poll(self, status: object) -> None:
+        self._running_poll_busy = False
+        if isinstance(status, SteamRunningStatus):
+            self._apply_running_status(status)
+
+    def _on_running_poll_failed(self, _message: str) -> None:
+        self._running_poll_busy = False
+        self.steam_status.setText("Steam: probe failed")
+        self.steam_status.setStyleSheet("color: #c05621;")
+        self._running = SteamRunningStatus(
+            running=False, evidence=(), inspection_failures=1
+        )
+        self._update_import_actions()
+
+    def _apply_running_status(self, status: SteamRunningStatus) -> None:
+        self._running = status
+        self._set_steam_status(status)
+
+    def _sync_running_status(self) -> None:
+        """Blocking probe used at click time so a just-started Steam is caught."""
+        if not self._steam_checks_enabled():
+            self._update_import_actions()
+            return
+        try:
+            status = self._detect_steam()
+        except Exception:  # noqa: BLE001 — treat a failed probe as not writable
+            status = SteamRunningStatus(running=False, evidence=(), inspection_failures=1)
+        self._apply_running_status(status)
 
     def _on_steam_failed(self, message: str) -> None:
         self._steam_busy = False
@@ -544,6 +600,15 @@ class MainWindow(QMainWindow):
             self.steam_status.setText("Steam: not running")
             self.steam_status.setStyleSheet("color: #2e7d32;")
             self.steam_status.setToolTip("No Steam process matched.")
+        if not self._steam_checks_enabled():
+            current = self.steam_status.text()
+            if "overridden" not in current:
+                self.steam_status.setText(f"{current} — detection overridden")
+            self.steam_status.setStyleSheet("color: #c05621;")
+            self.steam_status.setToolTip(
+                "Steam-running detection is overridden. Writes are allowed "
+                "even if the last probe thought Steam was running."
+            )
         self._update_import_actions()
 
     def _update_banner(self) -> None:
@@ -572,6 +637,11 @@ class MainWindow(QMainWindow):
             messages.append(
                 "Existing shortcuts.vdf could not be parsed, so Possible "
                 f"Existing Match and AppID occupancy are incomplete. {self._shortcuts_error}"
+            )
+        if not self._steam_checks_enabled():
+            messages.append(
+                "Steam-running detection is overridden. Writes are allowed "
+                "even if the probe thinks Steam is running."
             )
         self.banner.setVisible(bool(messages))
         self.banner.setText(" ".join(messages))
@@ -688,11 +758,26 @@ class MainWindow(QMainWindow):
         ]
 
     def _commit_hooks(self) -> CommitHooks:
-        return CommitHooks(detect_steam=self._detect_steam)
+        return CommitHooks(detect_steam=self._commit_detect_steam)
+
+    def _steam_checks_enabled(self) -> bool:
+        return self._store.steam_poll_enabled()
+
+    def _commit_detect_steam(self) -> SteamRunningStatus:
+        """Live probe used at commit time, or a closed result if overridden."""
+        if not self._steam_checks_enabled():
+            return SteamRunningStatus(
+                running=False,
+                evidence=("steam-running detection overridden",),
+                inspection_failures=0,
+            )
+        return self._detect_steam()
 
     def _write_ready_reason(self) -> str | None:
         if self._selected_installation is None or self._selected_account is None:
             return "Select a Steam installation and account first."
+        if not self._steam_checks_enabled():
+            return None
         if self._running is None:
             return "Steam status has not been checked yet."
         if self._running.running:
@@ -741,6 +826,7 @@ class MainWindow(QMainWindow):
         return answer == QMessageBox.StandardButton.Ok
 
     def _import_selected(self) -> None:
+        self._sync_running_status()
         blocked = self._write_ready_reason()
         if blocked is not None:
             QMessageBox.warning(self, "Cannot import", blocked)
@@ -771,35 +857,32 @@ class MainWindow(QMainWindow):
             f"will be created.{extra}",
         ):
             return
+        apps = [row.app for row in rows]
         try:
-            result = apply_applications(
-                [row.app for row in rows],
-                installation=installation,
-                account=account,
-                store=self._store,
-                steam_status=self._running,
-                hooks=self._commit_hooks(),
-            )
+            with tempfile.TemporaryDirectory(prefix="sdi-art-") as tmp:
+                artwork_files = self._prepare_import_artwork(apps, Path(tmp))
+                self._sync_running_status()
+                blocked = self._write_ready_reason()
+                if blocked is not None:
+                    QMessageBox.warning(self, "Cannot import", blocked)
+                    return
+                result = apply_applications(
+                    apps,
+                    installation=installation,
+                    account=account,
+                    store=self._store,
+                    steam_status=self._commit_detect_steam(),
+                    hooks=self._commit_hooks(),
+                    artwork_files=artwork_files,
+                )
         except (CommitError, ImportPlanningError) as error:
             QMessageBox.warning(self, "Import failed", str(error))
             self._refresh_import_statuses()
             return
-        backup = (
-            f"\nBackup: {result.commit.backup_path}" if result.commit.backup_path else ""
-        )
-        state_note = ""
-        if result.state_errors:
-            state_note = "\n\nState store errors (VDF was written):\n" + "\n".join(
-                result.state_errors
-            )
-        QMessageBox.information(
-            self,
-            "Import complete",
-            f"Wrote {len(result.imported)} shortcut(s).{backup}{state_note}",
-        )
-        self._refresh_import_statuses()
+        self._report_write_result("Import complete", result, apps, installation, account)
 
     def _relink_selected(self) -> None:
+        self._sync_running_status()
         blocked = self._write_ready_reason()
         if blocked is not None:
             QMessageBox.warning(self, "Cannot relink", blocked)
@@ -838,25 +921,131 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
-            result = relink_application(
-                app,
-                match.appid_unsigned,
-                installation=installation,
-                account=account,
-                store=self._store,
-                steam_status=self._running,
-                hooks=self._commit_hooks(),
-            )
+            with tempfile.TemporaryDirectory(prefix="sdi-art-") as tmp:
+                artwork_files = self._prepare_import_artwork([app], Path(tmp))
+                self._sync_running_status()
+                blocked = self._write_ready_reason()
+                if blocked is not None:
+                    QMessageBox.warning(self, "Cannot relink", blocked)
+                    return
+                result = relink_application(
+                    app,
+                    match.appid_unsigned,
+                    installation=installation,
+                    account=account,
+                    store=self._store,
+                    steam_status=self._commit_detect_steam(),
+                    hooks=self._commit_hooks(),
+                    artwork_files=artwork_files,
+                )
         except (CommitError, ImportPlanningError) as error:
             QMessageBox.warning(self, "Relink failed", str(error))
             self._refresh_import_statuses()
             return
+        self._report_write_result("Relink complete", result, [app], installation, account)
+
+    def _prepare_import_artwork(
+        self,
+        apps: Sequence[DesktopApplication],
+        dest_dir: Path,
+    ) -> dict[str, dict[str, Path]]:
+        """Collect per-app temps. No key means shortcut-only import."""
+        if not apps or not resolve_api_key():
+            return {}
+        files: dict[str, dict[str, Path]] = {}
+        for app in apps:
+            dialog = ArtworkDialog(app, dest_dir, parent=self)
+            dialog.exec()
+            choice = dialog.choice()
+            if choice.action == ACTION_SKIP_REMAINING:
+                break
+            if choice.action == ACTION_USE and choice.files:
+                files[app.desktop_id] = dict(choice.files)
+        return files
+
+    def _report_write_result(
+        self,
+        title: str,
+        result: ImportResult,
+        apps: Sequence[DesktopApplication],
+        installation: SteamInstallation,
+        account: SteamAccount,
+    ) -> None:
+        backup = (
+            f"\nBackup: {result.commit.backup_path}" if result.commit.backup_path else ""
+        )
+        notes = []
+        if result.state_errors:
+            notes.append(
+                "State store errors (VDF was written):\n" + "\n".join(result.state_errors)
+            )
+        if result.artwork_errors:
+            notes.append(
+                "Artwork errors (shortcuts remain valid):\n"
+                + "\n".join(result.artwork_errors)
+            )
+        extra = ("\n\n" + "\n\n".join(notes)) if notes else ""
         QMessageBox.information(
             self,
-            "Relink complete",
-            f"Mapped {app.desktop_id} to AppID {result.imported[0].appid_unsigned}.",
+            title,
+            f"Wrote {len(result.imported)} shortcut(s).{backup}{extra}",
         )
+        if result.artwork_errors:
+            retry = QMessageBox.question(
+                self,
+                "Retry artwork?",
+                "Shortcuts were written. Retry downloading and placing artwork?",
+                QMessageBox.StandardButton.No | QMessageBox.StandardButton.Yes,
+                QMessageBox.StandardButton.No,
+            )
+            if retry == QMessageBox.StandardButton.Yes:
+                self._retry_artwork(apps, installation, account, result)
         self._refresh_import_statuses()
+
+    def _retry_artwork(
+        self,
+        apps: Sequence[DesktopApplication],
+        installation: SteamInstallation,
+        account: SteamAccount,
+        previous: ImportResult,
+    ) -> None:
+        failed = {
+            app.desktop_id
+            for app in apps
+            if any(message.startswith(app.desktop_id) for message in previous.artwork_errors)
+        }
+        targets = [app for app in apps if app.desktop_id in failed] or list(apps)
+        try:
+            with tempfile.TemporaryDirectory(prefix="sdi-art-") as tmp:
+                artwork_files = self._prepare_import_artwork(targets, Path(tmp))
+                if not artwork_files:
+                    return
+                retry_apps = [app for app in targets if app.desktop_id in artwork_files]
+                self._sync_running_status()
+                blocked = self._write_ready_reason()
+                if blocked is not None:
+                    QMessageBox.warning(self, "Cannot retry artwork", blocked)
+                    return
+                result = apply_applications(
+                    retry_apps,
+                    installation=installation,
+                    account=account,
+                    store=self._store,
+                    steam_status=self._commit_detect_steam(),
+                    hooks=self._commit_hooks(),
+                    artwork_files=artwork_files,
+                )
+        except (CommitError, ImportPlanningError) as error:
+            QMessageBox.warning(self, "Artwork retry failed", str(error))
+            return
+        if result.artwork_errors:
+            QMessageBox.warning(
+                self,
+                "Artwork still incomplete",
+                "Shortcuts remain valid.\n" + "\n".join(result.artwork_errors),
+            )
+        else:
+            QMessageBox.information(self, "Artwork updated", "Artwork was written.")
 
     def _update_selection_count(self) -> None:
         count = len(self._model.selected_applications())
@@ -899,10 +1088,43 @@ class MainWindow(QMainWindow):
         if current.isValid():
             self._on_row_changed(current, current)
 
+    def _apply_steam_poll_settings(self, *, probe_now: bool = False) -> None:
+        """Start, stop, or retune the live Steam poll from stored preferences.
+
+        Tests construct the window with ``auto_refresh=False`` and never poll.
+        When detection is overridden, Import/Relink and the VDF commit skip
+        the Steam-running probe as well.
+        """
+        if not self._auto_refresh or not self._steam_checks_enabled():
+            self._steam_poll.stop()
+            self._update_banner()
+            if self._running is not None:
+                self._set_steam_status(self._running)
+            else:
+                self._update_import_actions()
+            return
+        interval = self._store.steam_poll_ms()
+        self._steam_poll.setInterval(interval)
+        if not self._steam_poll.isActive():
+            self._steam_poll.start()
+        if probe_now:
+            self._poll_steam_running()
+        self._update_banner()
+        if self._running is not None:
+            self._set_steam_status(self._running)
+        else:
+            self._update_import_actions()
+
     def _open_settings(self) -> None:
-        SettingsDialog(self).exec()
+        SettingsDialog(
+            self,
+            store=self._store,
+            on_poll_changed=lambda: self._apply_steam_poll_settings(probe_now=True),
+        ).exec()
+        self._apply_steam_poll_settings()
 
     def closeEvent(self, event) -> None:
+        self._steam_poll.stop()
         self._store.close()
         super().closeEvent(event)
 

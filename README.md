@@ -8,14 +8,13 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0–7 are implemented.** SteamGridDB, artwork, and a live native
-end-to-end pass are not.
+**Phases 0–9 are implemented.** A live native end-to-end pass (Phase 10)
+and the Flatpak Steam matrix (Phase 11) are not.
 
 The GUI can import selected applications into `shortcuts.vdf` when Steam is
-closed. Writes go through `steam/commit.py`: importer lock, backup, temp +
-fsync, parse-back, `os.replace`. A write-guard test allowlists only that
-module (plus creating the importer state directory). Debug commands stay
-read-only.
+closed. With `SGDB_API_KEY` (or a saved key), it can search SteamGridDB,
+preview artwork, and write selected images into the account's `config/grid/`
+directory after the VDF commit. Without a key, import is shortcut-only.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -27,7 +26,9 @@ read-only.
 | 5 | Persistent state and AppID allocation | done |
 | 6 | VDF read/update | done |
 | 7 | Safe VDF commit | done |
-| 8–11 | SteamGridDB, artwork UI, release gates | not started |
+| 8 | SteamGridDB client | done |
+| 9 | Artwork UI and `grid/` placement | done |
+| 10–11 | Native / Flatpak Steam release gates | not started |
 
 See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
 open issues.
@@ -62,6 +63,10 @@ steam-desktop-importer debug identity org.kde.kate.desktop
 
 # Show parsed shortcuts.vdf. Read-only; never writes.
 steam-desktop-importer debug dump-shortcuts
+
+# Search SteamGridDB. Needs SGDB_API_KEY or a saved key. Never writes Steam.
+steam-desktop-importer debug steamgriddb search Kate
+steam-desktop-importer debug steamgriddb grids 2254 --dimensions 600x900
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
@@ -99,6 +104,11 @@ Phase 6 can load, update by AppID, create a Steam-schema entry, and
 serialize binary KeyValues in memory. A no-op load/dumps of the live
 961-entry file is byte-identical. Phase 7 replaces a target file through
 the atomic transaction; tests use tmp copies, not this host's live VDF.
+Phase 8 talks to SteamGridDB with `SGDB_API_KEY` or a 0600 key file under
+`$XDG_CONFIG_HOME/steam-desktop-importer/`. Phase 9 places selected artwork
+into a *target* userdata `config/grid/` using the unsigned 32-bit AppID
+after the VDF commit. Unit tests use tmp directories; this host's live
+Steam grid is not written here.
 
 ## Development
 

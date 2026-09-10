@@ -5,8 +5,10 @@ fixtures really have the properties that docs/PHASE0_FORMAT_CHARACTERIZATION.md
 claims, so that later phases are built against an accurate model.
 
 They also enforce that Steam filesystem writes live only in
-``steam/commit.py`` (Phase 7 transaction), plus ``Path.mkdir`` for the
-importer state directory.
+``steam/commit.py`` (VDF) and ``steam/artwork.py`` (``grid/`` placement),
+plus ``Path.mkdir`` for the importer state directory, a 0600 SteamGridDB
+key file, and temp artwork downloads. Tests must not write this host's
+live Steam ``grid/``.
 """
 
 from __future__ import annotations
@@ -275,9 +277,9 @@ def _write_calls(tree: ast.AST) -> list[str]:
 
 
 # Phase 5 may create the importer state directory. Phase 7 may replace a
-# shortcuts.vdf through steam/commit.py only: same-directory temp, fsync,
-# backup copy, os.replace, leftover-temp/backup pruning. Do not copy this
-# allowlist into other modules.
+# shortcuts.vdf through steam/commit.py only. Phase 8 may write a 0600 API-key
+# file under XDG_CONFIG_HOME and download artwork into caller-supplied temp
+# paths. Phase 9 may place validated images under a userdata config/grid.
 _WRITE_ALLOWED = {
     "state/store.py": {"mkdir"},
     "steam/commit.py": {
@@ -288,15 +290,30 @@ _WRITE_ALLOWED = {
         "os.unlink",
         "shutil.copy2",
     },
+    "steam/artwork.py": {
+        "mkdir",
+        "os.write",
+        "os.fsync",
+        "os.replace",
+        "os.unlink",
+    },
+    "steamgriddb/auth.py": {"mkdir", "write_text", "os.chmod", "os.unlink"},
+    "steamgriddb/download.py": {
+        "mkdir",
+        "os.write",
+        "os.replace",
+        "os.unlink",
+    },
 }
 
 
 @pytest.mark.parametrize("module", sorted(SRC.rglob("*.py")), ids=lambda p: p.name)
 def test_package_performs_no_filesystem_writes(module):
-    """Phase 7: Steam writes exist only in ``steam/commit.py``.
+    """Steam writes exist only in ``steam/commit.py`` and ``steam/artwork.py``.
 
-    The state store may create its own directory. The VDF transaction is
-    allowlisted per call, not by silencing this test.
+    The state store may create its own directory. SteamGridDB may write a
+    config-file API key and temp artwork downloads. Grid placement is
+    allowlisted in ``steam/artwork.py`` only.
     """
     tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
     found = _write_calls(tree)

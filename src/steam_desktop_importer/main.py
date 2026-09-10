@@ -4,8 +4,8 @@ IMPLEMENTATION.md §33 asks for project-native debug tooling "rather than
 ad-hoc scripts that guess the first userdata directory".
 
 Implemented: ``debug roots``, ``debug scan``, ``debug desktop-entry``,
-``debug launch``, ``debug steam``, ``debug identity`` and
-``debug dump-shortcuts``.
+``debug launch``, ``debug steam``, ``debug identity``,
+``debug dump-shortcuts`` and ``debug steamgriddb``.
 
 ``debug launch`` prints the command a shortcut *would* use. It never executes
 it and never writes to Steam. ``debug steam`` reads Steam's configuration and
@@ -465,6 +465,81 @@ def _print_launch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sgdb_client():
+    from .steamgriddb import MissingAPIKeyError, SteamGridDBClient, SteamGridDBError
+
+    try:
+        return SteamGridDBClient()
+    except MissingAPIKeyError as error:
+        print(error)
+        return None
+    except SteamGridDBError as error:
+        print(error)
+        return None
+
+
+def _print_sgdb_search(args: argparse.Namespace) -> int:
+    from .steamgriddb import SteamGridDBError, search_queries
+
+    client = _sgdb_client()
+    if client is None:
+        return 2
+    try:
+        queries = search_queries(args.query)
+        seen: set[int] = set()
+        for index, query in enumerate(queries):
+            print(f"query {index + 1}: {query}")
+            try:
+                games = client.search_games(query)
+            except SteamGridDBError as error:
+                print(f"  error: {error}")
+                return 1
+            if not games:
+                print("  (no results)")
+                continue
+            for game in games:
+                if game.id in seen:
+                    continue
+                seen.add(game.id)
+                verified = "verified" if game.verified else "unverified"
+                types = ",".join(game.types) if game.types else "-"
+                print(f"  {game.id:>8}  {game.name}  [{types}]  {verified}")
+    finally:
+        client.close()
+    return 0
+
+
+def _print_sgdb_assets(args: argparse.Namespace) -> int:
+    from .steamgriddb import SteamGridDBError
+
+    client = _sgdb_client()
+    if client is None:
+        return 2
+    kind = args.sgdb_command
+    fetchers = {
+        "grids": lambda: client.get_grids(
+            args.game_id, dimensions=getattr(args, "dimensions", None) or None
+        ),
+        "heroes": lambda: client.get_heroes(args.game_id),
+        "logos": lambda: client.get_logos(args.game_id),
+        "icons": lambda: client.get_icons(args.game_id),
+    }
+    try:
+        assets = fetchers[kind]()
+    except SteamGridDBError as error:
+        print(error)
+        client.close()
+        return 1
+    client.close()
+    if not assets:
+        print("no artwork")
+        return 0
+    for asset in assets:
+        size = f"{asset.width}x{asset.height}" if asset.width and asset.height else "-"
+        print(f"{asset.id:>8}  {asset.style or '-':<12} {size:<12} {asset.url}")
+    return 0
+
+
 def _run_gui(_args: argparse.Namespace) -> int:
     from .ui.main_window import run_app
 
@@ -531,6 +606,25 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("--steam-installation", help="SteamInstallation.key")
     dump.add_argument("--account", type=int, help="32-bit Steam account ID")
     dump.set_defaults(func=_print_dump_shortcuts)
+
+    sgdb = debug_commands.add_parser(
+        "steamgriddb",
+        help="search SteamGridDB (Phase 8); never writes Steam or artwork files",
+    )
+    sgdb_commands = sgdb.add_subparsers(dest="sgdb_command", required=True)
+    sgdb_search = sgdb_commands.add_parser("search", help="search games by name")
+    sgdb_search.add_argument("query")
+    sgdb_search.set_defaults(func=_print_sgdb_search)
+    for kind in ("grids", "heroes", "logos", "icons"):
+        listing = sgdb_commands.add_parser(kind, help=f"list {kind} for a SteamGridDB game id")
+        listing.add_argument("game_id", type=int)
+        if kind == "grids":
+            listing.add_argument(
+                "--dimensions",
+                action="append",
+                help="repeatable, e.g. --dimensions 600x900",
+            )
+        listing.set_defaults(func=_print_sgdb_assets)
 
     return parser
 

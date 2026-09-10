@@ -26,11 +26,19 @@ from pathlib import Path
 from ..desktop.discovery import CollisionAcknowledgement, normalize_collision_path
 
 __all__ = [
+    "DEFAULT_STEAM_POLL_MS",
+    "MAX_STEAM_POLL_MS",
+    "MIN_STEAM_POLL_MS",
     "ManagedMapping",
     "StateStore",
+    "clamp_steam_poll_ms",
     "default_state_path",
     "xdg_state_home",
 ]
+
+DEFAULT_STEAM_POLL_MS = 2000
+MIN_STEAM_POLL_MS = 1000
+MAX_STEAM_POLL_MS = 60_000
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS mappings (
@@ -68,6 +76,13 @@ CREATE TABLE IF NOT EXISTS acknowledged_collisions (
     fingerprint TEXT NOT NULL,
     acknowledged_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS preferences (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    steam_poll_enabled INTEGER NOT NULL DEFAULT 1,
+    steam_poll_ms INTEGER NOT NULL DEFAULT 2000,
+    updated_at TEXT NOT NULL
+);
 """
 
 _ACK_REQUIRED_COLUMNS = frozenset(
@@ -97,6 +112,10 @@ def default_state_path(environ: dict[str, str] | None = None, home: Path | None 
 
 def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def clamp_steam_poll_ms(value: int) -> int:
+    return max(MIN_STEAM_POLL_MS, min(MAX_STEAM_POLL_MS, int(value)))
 
 
 @dataclass(frozen=True)
@@ -393,3 +412,38 @@ class StateStore:
             """
         ).fetchall()
         return tuple(_row_to_acknowledgement(row) for row in rows)
+
+    # -- preferences ----------------------------------------------------
+
+    def steam_poll_enabled(self) -> bool:
+        """Whether Steam-running detection is used to gate writes.
+
+        ``False`` is an override for detector false positives. It disables the
+        live poll, Import/Relink gating, and the commit-time probe.
+        """
+        row = self._connection.execute(
+            "SELECT steam_poll_enabled FROM preferences WHERE id = 1"
+        ).fetchone()
+        return True if row is None else bool(row["steam_poll_enabled"])
+
+    def steam_poll_ms(self) -> int:
+        row = self._connection.execute(
+            "SELECT steam_poll_ms FROM preferences WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return DEFAULT_STEAM_POLL_MS
+        return clamp_steam_poll_ms(int(row["steam_poll_ms"]))
+
+    def set_steam_poll(self, *, enabled: bool, interval_ms: int) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO preferences (id, steam_poll_enabled, steam_poll_ms, updated_at)
+            VALUES (1, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                steam_poll_enabled = excluded.steam_poll_enabled,
+                steam_poll_ms = excluded.steam_poll_ms,
+                updated_at = excluded.updated_at
+            """,
+            (1 if enabled else 0, clamp_steam_poll_ms(interval_ms), _now()),
+        )
+        self._connection.commit()

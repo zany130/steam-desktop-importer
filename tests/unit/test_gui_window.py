@@ -45,18 +45,54 @@ def test_window_constructs_without_scanning(qapp):
     assert window.windowTitle() == "Steam Desktop Importer"
     assert window.import_button.isEnabled() is False
     assert window.relink_button.isEnabled() is False
+    assert window._steam_poll.isActive() is False
     assert "Steam" in window.import_button.toolTip()
     assert window.imported_filter.isEnabled() is True
     window.close()
 
 
-def test_settings_dialog_does_not_offer_a_steamgriddb_key(qapp):
-    from PySide6.QtWidgets import QLabel
+def test_settings_dialog_has_a_steamgriddb_key_field(qapp):
+    from PySide6.QtWidgets import QLabel, QLineEdit
 
     dialog = SettingsDialog()
     body = "\n".join(widget.text() for widget in dialog.findChildren(QLabel))
-    assert "Nothing here is persisted" in body
-    assert "API-key" in body
+    assert "SteamGridDB" in body
+    assert dialog.key_edit.echoMode() == QLineEdit.EchoMode.Password
+    assert dialog.poll_enabled.isChecked() is True
+    dialog.close()
+
+
+def test_settings_warns_when_steam_detection_is_disabled(qapp, monkeypatch):
+    from steam_desktop_importer.ui.settings_dialog import DISABLE_STEAM_CHECK_WARNING
+
+    warnings: list[str] = []
+
+    def capture(parent, title, text, *args, **kwargs):
+        warnings.append(text)
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "warning", capture)
+    store = StateStore(":memory:")
+    dialog = SettingsDialog(store=store)
+    dialog.poll_enabled.setChecked(False)
+    assert store.steam_poll_enabled() is False
+    assert DISABLE_STEAM_CHECK_WARNING in warnings
+    dialog.poll_seconds.setValue(5)
+    dialog.poll_enabled.setChecked(True)
+    assert store.steam_poll_enabled() is True
+    assert store.steam_poll_ms() == 5000
+    dialog.close()
+
+
+def test_settings_cancel_keeps_steam_detection_enabled(qapp, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Cancel
+    )
+    store = StateStore(":memory:")
+    dialog = SettingsDialog(store=store)
+    dialog.poll_enabled.setChecked(False)
+    assert dialog.poll_enabled.isChecked() is True
+    assert store.steam_poll_enabled() is True
     dialog.close()
 
 
@@ -391,6 +427,7 @@ def test_import_selected_commits_vdf_and_state(qapp, tmp_path, monkeypatch):
     window._update_import_actions()
     assert window.import_button.isEnabled() is True
     monkeypatch.setattr(window, "_confirm_write", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(window, "_prepare_import_artwork", lambda *_args, **_kwargs: {})
     window._import_selected()
     vdf = shortcuts_vdf_path(account)
     entry = ShortcutDocument.load(vdf).find_by_appid(first_import_candidate(app.desktop_id))
@@ -399,4 +436,179 @@ def test_import_selected_commits_vdf_and_state(qapp, tmp_path, monkeypatch):
     mapping = store.get_mapping(installation.key, account.account_id32, app.desktop_id)
     assert mapping is not None
     assert window._model.rows()[0].import_status == STATUS_IMPORTED
+    window.close()
+
+
+def test_prepare_artwork_skips_without_a_key(qapp, tmp_path, monkeypatch):
+    monkeypatch.delenv("SGDB_API_KEY", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    window = _window()
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    assert window._prepare_import_artwork([app], tmp_path) == {}
+    window.close()
+
+
+def test_auto_refresh_starts_a_steam_status_poller(qapp, monkeypatch):
+    from steam_desktop_importer.ui.main_window import STEAM_POLL_MS
+
+    monkeypatch.setattr(MainWindow, "refresh", lambda self: None)
+    window = MainWindow(
+        auto_refresh=True,
+        state_store=StateStore(":memory:"),
+        detect_steam=lambda: CLOSED,
+    )
+    assert window._steam_poll.isActive() is True
+    assert window._steam_poll.interval() == STEAM_POLL_MS
+    window.close()
+    assert window._steam_poll.isActive() is False
+
+
+def test_stored_poll_interval_is_applied_and_can_be_disabled(qapp, monkeypatch):
+    monkeypatch.setattr(MainWindow, "refresh", lambda self: None)
+    store = StateStore(":memory:")
+    store.set_steam_poll(enabled=True, interval_ms=5000)
+    window = MainWindow(
+        auto_refresh=True,
+        state_store=store,
+        detect_steam=lambda: CLOSED,
+    )
+    assert window._steam_poll.isActive() is True
+    assert window._steam_poll.interval() == 5000
+    store.set_steam_poll(enabled=False, interval_ms=5000)
+    window._apply_steam_poll_settings()
+    assert window._steam_poll.isActive() is False
+    window.close()
+
+
+def test_applying_running_status_disables_import_without_refresh(qapp, tmp_path):
+    window = _window()
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    window._model.set_applications([_gui_app(tmp_path / "org.example.App.desktop")])
+    window._refresh_import_statuses()
+    window._model.set_all_selected(True)
+    window._running = CLOSED
+    window._update_import_actions()
+    assert window.import_button.isEnabled() is True
+    window._apply_running_status(
+        SteamRunningStatus(
+            running=True, evidence=("process name 'steam'",), inspection_failures=0
+        )
+    )
+    assert window.import_button.isEnabled() is False
+    assert "Close Steam" in window.import_button.toolTip()
+    assert "running" in window.steam_status.text()
+    window.close()
+
+
+def test_import_rechecks_steam_before_writing(qapp, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+    current = {"status": CLOSED}
+
+    window = MainWindow(
+        auto_refresh=False,
+        state_store=StateStore(":memory:"),
+        detect_steam=lambda: current["status"],
+    )
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    window._model.set_applications([app])
+    window._refresh_import_statuses()
+    window._model.set_all_selected(True)
+    window._running = CLOSED
+    window._update_import_actions()
+    assert window.import_button.isEnabled() is True
+    current["status"] = SteamRunningStatus(
+        running=True, evidence=("process name 'steam'",), inspection_failures=0
+    )
+    window._import_selected()
+    assert not shortcuts_vdf_path(account).exists()
+    assert window.import_button.isEnabled() is False
+    window.close()
+
+
+def test_overriding_steam_detection_allows_import_when_probe_says_running(
+    qapp, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        QMessageBox, "information", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+    store = StateStore(":memory:")
+    store.set_steam_poll(enabled=False, interval_ms=2000)
+    running = SteamRunningStatus(
+        running=True, evidence=("process name 'steam'",), inspection_failures=0
+    )
+    window = MainWindow(
+        auto_refresh=False,
+        state_store=store,
+        detect_steam=lambda: running,
+    )
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    window._model.set_applications([app])
+    window._refresh_import_statuses()
+    window._model.set_all_selected(True)
+    window._running = running
+    window._update_banner()
+    window._set_steam_status(running)
+    assert window.import_button.isEnabled() is True
+    assert "overridden" in window.banner.text()
+    assert "detection overridden" in window.steam_status.text()
+    monkeypatch.setattr(window, "_confirm_write", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(window, "_prepare_import_artwork", lambda *_args, **_kwargs: {})
+    window._import_selected()
+    vdf = shortcuts_vdf_path(account)
+    assert ShortcutDocument.load(vdf).find_by_appid(first_import_candidate(app.desktop_id))
     window.close()

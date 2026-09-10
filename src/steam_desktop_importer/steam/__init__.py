@@ -2,8 +2,10 @@
 
 Phases 4–6 are read-only against Steam paths. Phase 7 may replace
 ``shortcuts.vdf`` only through :func:`commit_shortcuts` / :func:`apply_applications`.
-Installation and account selection is never resolved silently when there is a
-real choice to make (rules 7 and 8).
+Phase 9 may place artwork under ``userdata/.../config/grid/`` only through
+:mod:`steam_desktop_importer.steam.artwork`. Installation and account
+selection is never resolved silently when there is a real choice to make
+(rules 7 and 8).
 """
 
 from __future__ import annotations
@@ -23,6 +25,18 @@ from .appid import (
     game_id_64,
     int32_to_uint32,
     uint32_to_int32,
+)
+from .artwork import (
+    SLOT_HERO,
+    SLOT_ICON,
+    SLOT_LOGO,
+    SLOT_PORTRAIT,
+    SLOT_WIDE,
+    artwork_filename,
+    commit_artwork_files,
+    grid_dir,
+    grid_id,
+    place_artwork,
 )
 from .commit import (
     MAX_BACKUPS,
@@ -77,6 +91,11 @@ __all__ = [
     "FLATPAK_STEAM_APP_ID",
     "MAX_BACKUPS",
     "NATIVE_ROOT_CANDIDATES",
+    "SLOT_HERO",
+    "SLOT_ICON",
+    "SLOT_LOGO",
+    "SLOT_PORTRAIT",
+    "SLOT_WIDE",
     "STEAMID64_BASE",
     "AccountSelection",
     "AppIdAllocationError",
@@ -102,6 +121,8 @@ __all__ = [
     "account_id32_to_steam_id64",
     "allocate_appid",
     "apply_applications",
+    "artwork_filename",
+    "commit_artwork_files",
     "commit_shortcuts",
     "detect_steam_running",
     "discover_accounts",
@@ -111,11 +132,14 @@ __all__ = [
     "format_launch_options",
     "format_start_dir",
     "game_id_64",
+    "grid_dir",
+    "grid_id",
     "int32_to_uint32",
     "is_steam_root",
     "list_existing_shortcuts",
     "lock_path_for",
     "normalize_exe",
+    "place_artwork",
     "quote_steam_token",
     "relink_application",
     "select_account",

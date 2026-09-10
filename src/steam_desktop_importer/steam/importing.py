@@ -1,8 +1,8 @@
-"""Import selected desktop entries through a safe VDF commit (Phase 7).
+"""Import selected desktop entries through a safe VDF commit (Phases 7–9).
 
-§26 workflow without artwork: confirm the entry, resolve a launch vector,
-allocate or reuse a stable AppID, mutate the in-memory document, commit the
-VDF, then persist mappings. §27 order is VDF first, state second.
+§26 / §18.4 order: prepare artwork temps, mutate the in-memory VDF, commit
+the VDF, persist mappings, then place ``grid/`` files. Artwork failures do
+not roll back a successful shortcut write.
 
 Possible Existing Match is never auto-owned. Relink is an explicit call with
 the existing unsigned AppID.
@@ -12,17 +12,19 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from ..launch import LaunchAdapterError, build_launch_vector
 from ..models import DesktopApplication, SteamAccount, SteamInstallation
-from ..state import (
+from ..state.status import (
     STATUS_POSSIBLE_MATCH,
-    StateStore,
     current_exec,
     current_name,
     import_status,
 )
+from ..state.store import StateStore
 from .appid import allocate_appid
+from .artwork import SLOT_ICON, commit_artwork_files, destination_for
 from .commit import CommitHooks, CommitResult, commit_shortcuts
 from .running import SteamRunningStatus
 from .shortcut_identities import ExistingShortcut, shortcuts_vdf_path
@@ -53,11 +55,12 @@ class ImportedShortcut:
 
 @dataclass(frozen=True)
 class ImportResult:
-    """VDF commit plus any state rows that could not be persisted afterwards."""
+    """VDF commit plus any state or artwork steps that could not finish."""
 
     commit: CommitResult
     imported: tuple[ImportedShortcut, ...]
     state_errors: tuple[str, ...] = ()
+    artwork_errors: tuple[str, ...] = ()
 
 
 def _fields_for(app: DesktopApplication) -> tuple[str, str, str, str]:
@@ -92,6 +95,7 @@ def _apply_one(
     account_id32: int,
     occupied: set[int],
     relink_appids: Mapping[str, int],
+    icon_paths: Mapping[str, str],
 ) -> ImportedShortcut:
     mapping = store.get_mapping(installation_key, account_id32, app.desktop_id)
     name, exe, start_dir, launch_options = _fields_for(app)
@@ -116,6 +120,9 @@ def _apply_one(
             launch_options=launch_options,
         )
         occupied.add(appid)
+        icon = icon_paths.get(app.desktop_id)
+        if icon is not None:
+            document.update_by_appid(appid, icon=icon)
         return ImportedShortcut(app.desktop_id, appid, "relinked")
 
     if status == STATUS_POSSIBLE_MATCH:
@@ -149,6 +156,9 @@ def _apply_one(
             )
             action = "created"
         occupied.add(appid)
+        icon = icon_paths.get(app.desktop_id)
+        if icon is not None:
+            document.update_by_appid(appid, icon=icon)
         return ImportedShortcut(app.desktop_id, appid, action)
 
     appid = allocate_appid(app.desktop_id, occupied)
@@ -160,6 +170,9 @@ def _apply_one(
         launch_options=launch_options,
     )
     occupied.add(appid)
+    icon = icon_paths.get(app.desktop_id)
+    if icon is not None:
+        document.update_by_appid(appid, icon=icon)
     return ImportedShortcut(app.desktop_id, appid, "created")
 
 
@@ -199,12 +212,14 @@ def apply_applications(
     steam_status: SteamRunningStatus | None = None,
     hooks: CommitHooks | None = None,
     original_bytes: bytes | None = None,
+    icon_paths: Mapping[str, str] | None = None,
+    artwork_files: Mapping[str, Mapping[str, Path]] | None = None,
 ) -> ImportResult:
-    """Mutate, commit, then persist mappings for ``applications``.
+    """Mutate, commit, then persist mappings and place prepared artwork.
 
     The VDF is not touched if planning fails. After a successful commit,
-    mapping failures are returned in ``state_errors`` rather than rolling
-    back Steam's file.
+    mapping and artwork failures are returned rather than rolling back
+    Steam's file. Artwork is committed last (IMPLEMENTATION.md §18.4).
     """
     if not applications:
         raise ImportPlanningError("no applications selected")
@@ -225,6 +240,8 @@ def apply_applications(
     )
     planned: list[ImportedShortcut] = []
     links = dict(relink_appids or {})
+    icons = dict(icon_paths or {})
+    prepared_art = dict(artwork_files or {})
     for app in applications:
         planned.append(
             _apply_one(
@@ -235,8 +252,10 @@ def apply_applications(
                 account.account_id32,
                 occupied,
                 links,
+                icons,
             )
         )
+    _assign_artwork_icons(document, account, planned, icons, prepared_art)
 
     commit = commit_shortcuts(
         vdf_path,
@@ -252,7 +271,14 @@ def apply_applications(
         installation.key,
         account.account_id32,
     )
-    return ImportResult(commit=commit, imported=tuple(planned), state_errors=state_errors)
+    appids = {item.desktop_id: item.appid_unsigned for item in planned}
+    artwork_errors = commit_artwork_files(account, appids, prepared_art)
+    return ImportResult(
+        commit=commit,
+        imported=tuple(planned),
+        state_errors=state_errors,
+        artwork_errors=artwork_errors,
+    )
 
 
 def relink_application(
@@ -264,6 +290,8 @@ def relink_application(
     store: StateStore,
     steam_status: SteamRunningStatus | None = None,
     hooks: CommitHooks | None = None,
+    icon_paths: Mapping[str, str] | None = None,
+    artwork_files: Mapping[str, Mapping[str, Path]] | None = None,
 ) -> ImportResult:
     """Take ownership of an existing unmanaged shortcut. Never allocates."""
     vdf_path = shortcuts_vdf_path(account)
@@ -300,4 +328,32 @@ def relink_application(
         relink_appids={app.desktop_id: appid_unsigned},
         steam_status=steam_status,
         hooks=hooks,
+        icon_paths=icon_paths,
+        artwork_files=artwork_files,
     )
+
+
+def _assign_artwork_icons(
+    document: ShortcutDocument,
+    account: SteamAccount,
+    planned: Sequence[ImportedShortcut],
+    icons: Mapping[str, str],
+    artwork_files: Mapping[str, Mapping[str, Path]],
+) -> None:
+    """Write the persistent ``_icon`` path into the VDF before it is committed.
+
+    Creating the grid file is not enough (IMPLEMENTATION.md §20). The path is
+    known before placement; a later artwork failure leaves a dangling icon
+    path and a still-valid shortcut.
+    """
+    for item in planned:
+        if item.desktop_id in icons:
+            continue
+        source = artwork_files.get(item.desktop_id, {}).get(SLOT_ICON)
+        if source is None:
+            continue
+        try:
+            dest = destination_for(account, item.appid_unsigned, SLOT_ICON, source)
+        except Exception:  # noqa: BLE001 — placement reports the same failure
+            continue
+        document.update_by_appid(item.appid_unsigned, icon=str(dest))
