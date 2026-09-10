@@ -2,7 +2,7 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0–9 complete. 425 tests passing.**
+**Current state: Phases 0–9 complete. 433 tests passing.**
 Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
 artwork is placed under a userdata `config/grid/` only through
 `steam/artwork.py`. Unit tests use `tmp_path` fake userdata; this host's
@@ -155,6 +155,9 @@ ticked.
 - [x] Steam installation selector; several start on a placeholder (rule 7)
 - [x] Steam account selector; several require the confirmation dialog (rule 8)
 - [x] Steam running indicator (§14), used for display and to gate writes
+- [x] Live Steam poll while the window is open, plus a re-check on Import/Relink
+      (interval configurable in Settings; detection can be overridden with a
+      warning for false positives, which also skips the write-time probe)
 - [x] Refresh off the GUI thread (`QThreadPool` / `QRunnable`, §25.4)
 - [x] Settings control that does not pretend later phases exist
 - [x] Desktop-ID collision acknowledgement (session-only in Phase 3; persisted in Phase 5)
@@ -368,7 +371,9 @@ the temp copy updated, and the real userdata mtime/size/bytes were unchanged.
 - [x] Import applies New/Changed/Imported; Possible Existing Match is relink
       only
 - [x] Mappings persisted only after a successful VDF commit
-- [x] Import / Relink buttons gated on Steam closed + selected target
+- [x] Import / Relink buttons gated on Steam closed + selected target;
+      status is polled live and re-checked on click unless detection is
+      overridden
 
 ### Not written, on purpose
 
