@@ -228,7 +228,24 @@ def commit_collections(
             active_hooks.before_replace(namespace_temp, namespace_path)
 
         active_hooks.replace(str(namespace_temp), str(namespace_path))
-        active_hooks.replace(str(index_temp), str(index_path))
+        try:
+            active_hooks.replace(str(index_temp), str(index_path))
+        except Exception as error:
+            rollback_temp = temp_path_for(namespace_path)
+            try:
+                if namespace_backup is not None and namespace_backup.is_file():
+                    active_hooks.copy_file(namespace_backup, rollback_temp)
+                    active_hooks.replace(str(rollback_temp), str(namespace_path))
+                else:
+                    _unlink_if_exists(namespace_path)
+            except Exception as rollback_error:
+                raise CommitError(
+                    f"failed to rollback {namespace_path} after index replace failure: "
+                    f"{rollback_error}; original error: {error}"
+                ) from rollback_error
+            finally:
+                _unlink_if_exists(rollback_temp)
+            raise
         replaced = True
         _fsync_directory(namespace_path.parent)
         return CollectionCommitResult(

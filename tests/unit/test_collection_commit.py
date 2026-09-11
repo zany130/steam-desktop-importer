@@ -116,3 +116,34 @@ def test_crash_after_serialize_leaves_live_files(tmp_path):
         )
     assert live.read_bytes() == original
     assert not temp_path_for(live).exists()
+
+
+def test_second_replace_failure_rolls_back_namespace(tmp_path):
+    account = _account(tmp_path / "Steam")
+    cloud = seed_cloud_storage(account)
+    live = cloud / "cloud-storage-namespace-1.json"
+    index = cloud / "cloud-storage-namespaces.json"
+    original = live.read_bytes()
+    original_index = index.read_bytes()
+    document = load_collections(account)
+    document.apply_assignment(CollectionAssignment(create_names=("Crash",)), [1], now=1)
+    calls = 0
+
+    def fail_second_replace(source: str, destination: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected replace failure")
+        Path(source).replace(destination)
+
+    with pytest.raises(OSError, match="injected replace failure"):
+        commit_collections(
+            document,
+            original_namespace_bytes=original,
+            original_index_bytes=original_index,
+            hooks=_closed_hooks(replace=fail_second_replace),
+        )
+    assert live.read_bytes() == original
+    assert index.read_bytes() == original_index
+    assert not temp_path_for(live).exists()
+    assert not temp_path_for(index).exists()
