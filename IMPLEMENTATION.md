@@ -1506,20 +1506,15 @@ Native Steam is the MVP release target.
 
 ## Phase 11 — Flatpak Steam experimental adapter
 
-Behind an experimental feature flag, test:
+Implemented against fixtures. Shortcuts imported into Flatpak Steam are
+wrapped with `flatpak-spawn --host`. A Settings flag (default on) can disable
+the wrap. Permission to `org.freedesktop.Flatpak` is probed read-only; the
+manual override command is shown and **never executed**.
 
-- stock permissions;
-- explicit `org.freedesktop.Flatpak` permission;
-- native host app;
-- host Flatpak;
-- Snap;
-- AppImage;
-- working directory;
-- env wrapper;
-- artwork;
-- icon.
-
-Do not advertise full Flatpak Steam support until this matrix passes.
+Live TEST-001 (stock vs granted Flathub Steam, host apps / Flatpaks / Snaps /
+AppImages, working directory, env wrapper, artwork, icon) still needs
+Environment B. Until that matrix passes, do not advertise full Flatpak Steam
+support.
 
 ## Phase 12 — Steam collections
 

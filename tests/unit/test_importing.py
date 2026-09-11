@@ -400,3 +400,55 @@ def test_collection_commit_os_error_is_reported_not_raised(tmp_path, monkeypatch
     )
     assert result.collection_errors
     assert "disk full" in result.collection_errors[0]
+
+
+def _flatpak_installation(root: Path) -> SteamInstallation:
+    return SteamInstallation(
+        kind="flatpak",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Flatpak Steam (experimental)",
+    )
+
+
+def test_flatpak_steam_import_wraps_host_command(tmp_path):
+    root = tmp_path / "Steam"
+    installation = _flatpak_installation(root)
+    account = _account(root)
+    app = make_app(tmp_path / "org.example.App.desktop")
+    result = apply_applications(
+        [app],
+        installation=installation,
+        account=account,
+        store=StateStore(":memory:"),
+        steam_status=CLOSED,
+        hooks=_hooks(),
+        flatpak_spawn="/usr/bin/flatpak-spawn",
+    )
+    appid = first_import_candidate(app.desktop_id)
+    entry = ShortcutDocument.load(shortcuts_vdf_path(account)).find_by_appid(appid)
+    assert entry is not None
+    assert entry.exe == '"/usr/bin/flatpak-spawn"'
+    assert entry.launch_options == "--host /usr/bin/example"
+    assert result.imported[0].action == "created"
+
+
+def test_flatpak_steam_import_can_disable_host_wrap(tmp_path):
+    root = tmp_path / "Steam"
+    account = _account(root)
+    app = make_app(tmp_path / "org.example.App.desktop")
+    result = apply_applications(
+        [app],
+        installation=_flatpak_installation(root),
+        account=account,
+        store=StateStore(":memory:"),
+        steam_status=CLOSED,
+        hooks=_hooks(),
+        host_launch=False,
+        flatpak_spawn="/usr/bin/flatpak-spawn",
+    )
+    appid = first_import_candidate(app.desktop_id)
+    entry = ShortcutDocument.load(shortcuts_vdf_path(account)).find_by_appid(appid)
+    assert entry is not None
+    assert entry.exe == '"/usr/bin/example"'
+    assert result.imported

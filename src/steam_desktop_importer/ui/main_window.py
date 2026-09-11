@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..desktop.discovery import DiscoveryResult
+from ..launch import MANUAL_OVERRIDE_COMMAND, probe_host_launch_permission
 from ..models import SOURCE_KINDS, DesktopApplication, SteamAccount, SteamInstallation, UnsupportedCode
 from ..state import (
     DEFAULT_STEAM_POLL_MS,
@@ -662,10 +663,26 @@ class MainWindow(QMainWindow):
     def _update_banner(self) -> None:
         messages: list[str] = []
         if self._selected_installation and self._selected_installation.is_experimental:
-            messages.append(
-                "Flatpak Steam is experimental. Host launching is not implemented "
-                "in the MVP, and sandbox permissions will never be changed automatically."
-            )
+            enabled = self._store.flatpak_steam_host_launch()
+            if enabled:
+                messages.append(
+                    "Flatpak Steam is experimental. Shortcuts use "
+                    "flatpak-spawn --host. Live launch is not validated on "
+                    "this release; sandbox permissions are never changed "
+                    "automatically."
+                )
+                permission = probe_host_launch_permission()
+                if not permission.granted:
+                    messages.append(
+                        f"{permission.evidence} If you choose to grant it "
+                        f"yourself: {MANUAL_OVERRIDE_COMMAND}"
+                    )
+            else:
+                messages.append(
+                    "Flatpak Steam is experimental. Host launching is disabled "
+                    "in Settings, so raw host paths will be written. Sandbox "
+                    "permissions are never changed automatically."
+                )
         if self.install_combo.currentData() is None and self.install_combo.isEnabled():
             messages.append(
                 "Several Steam installations were found. Choose one; the first "
@@ -1283,6 +1300,7 @@ class MainWindow(QMainWindow):
             on_poll_changed=lambda: self._apply_steam_poll_settings(probe_now=True),
         ).exec()
         self._apply_steam_poll_settings()
+        self._update_banner()
 
     def closeEvent(self, event) -> None:
         self._steam_poll.stop()

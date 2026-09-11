@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS preferences (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     steam_poll_enabled INTEGER NOT NULL DEFAULT 1,
     steam_poll_ms INTEGER NOT NULL DEFAULT 2000,
+    flatpak_steam_host_launch INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
 """
@@ -185,6 +186,7 @@ class StateStore:
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.executescript(_SCHEMA)
         self._discard_unbound_acknowledgements()
+        self._ensure_preference_columns()
         self._connection.commit()
 
     def _discard_unbound_acknowledgements(self) -> None:
@@ -201,6 +203,16 @@ class StateStore:
             return
         self._connection.execute("DROP TABLE acknowledged_collisions")
         self._connection.executescript(_SCHEMA)
+
+    def _ensure_preference_columns(self) -> None:
+        columns = {
+            row[1] for row in self._connection.execute("PRAGMA table_info(preferences)")
+        }
+        if "flatpak_steam_host_launch" not in columns:
+            self._connection.execute(
+                "ALTER TABLE preferences ADD COLUMN flatpak_steam_host_launch "
+                "INTEGER NOT NULL DEFAULT 1"
+            )
 
     def close(self) -> None:
         self._connection.close()
@@ -433,6 +445,34 @@ class StateStore:
         if row is None:
             return DEFAULT_STEAM_POLL_MS
         return clamp_steam_poll_ms(int(row["steam_poll_ms"]))
+
+    def flatpak_steam_host_launch(self) -> bool:
+        """Experimental Flatpak Steam ``flatpak-spawn --host`` wrapping.
+
+        Default on. Disabling writes raw host paths, which typically fail
+        inside the Steam sandbox. This importer never grants the portal.
+        """
+        row = self._connection.execute(
+            "SELECT flatpak_steam_host_launch FROM preferences WHERE id = 1"
+        ).fetchone()
+        return True if row is None else bool(row["flatpak_steam_host_launch"])
+
+    def set_flatpak_steam_host_launch(self, enabled: bool) -> None:
+        poll_enabled = 1 if self.steam_poll_enabled() else 0
+        interval = self.steam_poll_ms()
+        self._connection.execute(
+            """
+            INSERT INTO preferences (
+                id, steam_poll_enabled, steam_poll_ms, flatpak_steam_host_launch, updated_at
+            )
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                flatpak_steam_host_launch = excluded.flatpak_steam_host_launch,
+                updated_at = excluded.updated_at
+            """,
+            (poll_enabled, interval, 1 if enabled else 0, _now()),
+        )
+        self._connection.commit()
 
     def set_steam_poll(self, *, enabled: bool, interval_ms: int) -> None:
         self._connection.execute(

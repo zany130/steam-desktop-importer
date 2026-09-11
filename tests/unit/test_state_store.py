@@ -109,6 +109,13 @@ def test_steam_poll_preferences_default_and_round_trip():
         store.set_steam_poll(enabled=True, interval_ms=50)
         assert store.steam_poll_enabled() is True
         assert store.steam_poll_ms() == MIN_STEAM_POLL_MS
+        assert store.flatpak_steam_host_launch() is True
+        store.set_flatpak_steam_host_launch(False)
+        assert store.flatpak_steam_host_launch() is False
+        store.set_steam_poll(enabled=True, interval_ms=2000)
+        assert store.flatpak_steam_host_launch() is False
+        store.set_flatpak_steam_host_launch(True)
+        assert store.flatpak_steam_host_launch() is True
 
 
 def test_collision_acknowledgements_are_bound_to_the_physical_winner(tmp_path):

@@ -38,7 +38,9 @@ __all__ = ["DISABLE_STEAM_CHECK_WARNING", "SettingsDialog"]
 _POLICY = """<p><b>Current policy</b></p>
 <ul>
 <li>Native Steam is the MVP target.</li>
-<li>Flatpak Steam is experimental and is labelled as such.</li>
+<li>Flatpak Steam host launching is experimental. Shortcuts are wrapped
+with <code>flatpak-spawn --host</code>. This importer never grants
+<code>org.freedesktop.Flatpak</code>.</li>
 <li>Several installations or accounts are never chosen silently.</li>
 <li>Writes to <code>shortcuts.vdf</code> use the Phase 7 transaction
 (lock, backup, fsync, parse-back, replace) and require Steam to be
@@ -142,6 +144,26 @@ class SettingsDialog(QDialog):
         self.poll_enabled.toggled.connect(self._on_poll_toggled)
         self.poll_seconds.valueChanged.connect(self._on_poll_interval_changed)
 
+        self.host_launch = QCheckBox(
+            "Experimental Flatpak Steam host launching (flatpak-spawn --host)"
+        )
+        self.host_launch.setChecked(True)
+        self.host_launch.setToolTip(
+            "When Flatpak Steam is the import target, wrap host commands with "
+            "flatpak-spawn --host. This importer never runs flatpak override."
+        )
+        if store is not None:
+            self.host_launch.setChecked(store.flatpak_steam_host_launch())
+        layout.addWidget(self.host_launch)
+        host_note = QLabel(
+            "Stock Flathub Steam does not grant org.freedesktop.Flatpak. "
+            "If launching from Flatpak Steam fails, you may run the override "
+            "yourself; the importer will not do it."
+        )
+        host_note.setWordWrap(True)
+        layout.addWidget(host_note)
+        self.host_launch.toggled.connect(self._on_host_launch_toggled)
+
         policy = QLabel(_POLICY)
         policy.setWordWrap(True)
         policy.setTextFormat(Qt.TextFormat.RichText)
@@ -187,6 +209,11 @@ class SettingsDialog(QDialog):
         )
         if self._on_poll_changed is not None:
             self._on_poll_changed()
+
+    def _on_host_launch_toggled(self, checked: bool) -> None:
+        if self._loading or self._store is None:
+            return
+        self._store.set_flatpak_steam_host_launch(checked)
 
     def _save_key(self) -> None:
         try:

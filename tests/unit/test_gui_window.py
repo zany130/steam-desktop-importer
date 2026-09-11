@@ -233,6 +233,15 @@ def test_settings_dialog_has_a_steamgriddb_key_field(qapp):
     assert "SteamGridDB" in body
     assert dialog.key_edit.echoMode() == QLineEdit.EchoMode.Password
     assert dialog.poll_enabled.isChecked() is True
+    assert dialog.host_launch.isChecked() is True
+    dialog.close()
+
+
+def test_settings_persists_flatpak_steam_host_launch(qapp):
+    store = StateStore(":memory:")
+    dialog = SettingsDialog(store=store)
+    dialog.host_launch.setChecked(False)
+    assert store.flatpak_steam_host_launch() is False
     dialog.close()
 
 

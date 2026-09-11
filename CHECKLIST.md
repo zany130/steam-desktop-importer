@@ -2,11 +2,11 @@
 
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
-**Current state: Phases 0–10 complete on native Steam. OPEN-4 resolved.
-Phase 12 collection writes are implemented against fixtures. This importer
-never mutates Steam userdata while Steam is running. Phase 11 (Flatpak Steam)
-is not started.
-476 tests passing.**
+**Current state: Phases 0–12 on native Steam. Phase 11 Flatpak Steam host
+launching is experimental and fixture-tested; live TEST-001 is not validated
+on this host. This importer never mutates Steam userdata while Steam is
+running. v1.0.0 is source/venv plus an AppImage.
+489 tests passing.**
 Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
 artwork is placed under a userdata `config/grid/` only through
 `steam/artwork.py`. Collection JSON is replaced only through
@@ -459,6 +459,20 @@ Recorded in `docs/PHASE10_NATIVE_RELEASE_GATE.md`.
 - [x] Post-Steam re-import: AppID `3511661831`, `LastPlayTime` kept, 983/983 byte-identical including Steam's recasing; 980/980 third-party vs pre-Konsole baseline
 - TEST-005 artwork hot reload — **dropped**. No writes while Steam is running.
 
+## Phase 11 — Flatpak Steam experimental adapter (§11)
+
+Implemented against fixtures. Live TEST-001 (Flathub Steam launch) is **not**
+validated on this host. Do not advertise full Flatpak Steam support.
+
+- [x] When the import target is Flatpak Steam, wrap host commands with
+      `flatpak-spawn --host`
+- [x] Settings flag (default on) can disable the wrap
+- [x] Read-only permission probe for `org.freedesktop.Flatpak`
+- [x] Banner and `debug steam` show the manual override command
+- [x] `flatpak override --talk-name=...` is **never** executed (rule 23)
+- [x] Native Steam imports are unchanged
+- [ ] TEST-001 live launch matrix (Environment B)
+
 ## Phase 12 — Steam collections (§24)
 
 Implemented against fixtures. Writes require Steam closed; there is no
@@ -481,22 +495,19 @@ live-Steam edit path and no live UI release gate. Recorded in
 
 ## Not started
 
-Phase 11. Specifically **not** implemented, as instructed:
+Specifically **not** implemented:
 
-- Any Flatpak permission modification (§11, rule 23)
-- Flatpak Steam matrix (Phase 11)
+- Any Flatpak **permission modification** (§11, rule 23)
+- TEST-001 live Flatpak Steam launch matrix (needs Environment B)
+- Flatpak of **this importer** (not v1.0.0; §2.2)
 
 ## Release packaging
 
-Not started. The importer is still `0.0.1` and is run from an editable venv.
-**v1.0.0** is AppImage (and source / venv), matching §2.1. Packaging **this
-importer** as a Flatpak stays out of 1.0.0: §2.2, host filesystem, Steam
-userdata, desktop discovery, and process inspection. Revisit Flatpak after
-1.0.0 with an explicit permission design; never auto-grant Steam sandbox
-overrides (rule 23).
+**v1.0.0** is source/venv and an AppImage (`scripts/build_appimage.sh`).
+Packaging **this importer** as a Flatpak stays out of 1.0.0 (§2.2).
 
-- [ ] Version bump off `0.0.1` and a release note
-- [ ] AppImage of the importer (host filesystem, Steam closed writes)
+- [x] Version bump to `1.0.0`
+- [x] AppImage build recipe (host filesystem, Steam-closed writes)
 - Flatpak of the importer — **not v1.0.0**
 
 ---
@@ -891,7 +902,7 @@ Carried forward from §32 and §36. None of these were validated:
 
 | Item | Why not |
 | --- | --- |
-| TEST-001 Flatpak Steam host launching | No Flatpak Steam on the capture host |
+| TEST-001 Flatpak Steam host launching | Wrap is fixture-tested; live Flathub launch needs Environment B |
 | TEST-002 Account-selection hints | Only one Steam account available; multi-account logic is fixture-tested only |
 | TEST-003 `FlatpakAppID` | Requires live A/B shortcuts |
 | TEST-004 `ShortcutPath` | Requires live A/B shortcuts |

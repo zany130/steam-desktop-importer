@@ -15,7 +15,8 @@ never writes to it.
 With no subcommand the PySide6 GUI starts. Import writes ``shortcuts.vdf``
 only through the Phase 7 transaction, and only while Steam is closed.
 Optional collection membership is written afterwards through
-``steam/collection_commit.py``.
+``steam/collection_commit.py``. Flatpak Steam imports wrap host commands
+with ``flatpak-spawn --host`` and never grant sandbox permissions.
 """
 
 from __future__ import annotations
@@ -31,7 +32,12 @@ from .desktop.discovery import (
     ordered_application_roots,
 )
 from .desktop.parser import DesktopEntryError, build_application, parse_desktop_entry
-from .launch import LaunchAdapterError, build_launch_vector
+from .launch import (
+    LaunchAdapterError,
+    build_launch_vector,
+    probe_host_launch_permission,
+    wrap_for_flatpak_steam,
+)
 from .models import DesktopApplication
 from .state import (
     StateStore,
@@ -236,6 +242,12 @@ def _print_steam(args: argparse.Namespace) -> int:
         print(f"      key           {installation.key}")
         if installation.is_experimental:
             print("      note          Flatpak Steam is experimental (§11)")
+            permission = probe_host_launch_permission()
+            print(f"      host launch   {'granted' if permission.granted else 'not granted'}")
+            print(f"      evidence      {permission.evidence}")
+            if not permission.granted:
+                print(f"      override      {permission.override_command}")
+                print("      override      never run by this importer")
 
     print(f"selection           {selection.reason}")
     print(f"needs confirmation  {selection.requires_confirmation}")
@@ -553,6 +565,8 @@ def _print_launch(args: argparse.Namespace) -> int:
     for app in selected:
         try:
             vector = build_launch_vector(app)
+            if args.flatpak_steam:
+                vector = wrap_for_flatpak_steam(vector)
         except LaunchAdapterError as error:
             refused.append((app.desktop_id, error.code))
             continue
@@ -700,6 +714,11 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("desktop_id", nargs="?", help="limit to one desktop ID")
     launch.add_argument("--all", action="store_true", help="include NoDisplay entries")
     launch.add_argument("--verbose", action="store_true", help="print every vector")
+    launch.add_argument(
+        "--flatpak-steam",
+        action="store_true",
+        help="show the experimental flatpak-spawn --host wrap (Phase 11); never writes",
+    )
     launch.set_defaults(func=_print_launch)
 
     steam = debug_commands.add_parser(
