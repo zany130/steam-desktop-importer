@@ -327,3 +327,76 @@ def test_planning_failure_in_a_batch_writes_nothing(tmp_path):
         )
     assert not shortcuts_vdf_path(_account(root)).exists()
     assert store.list_mappings(_installation(root).key, 11111111) == []
+
+
+def test_import_without_collections_does_not_create_cloud_storage(tmp_path):
+    root = tmp_path / "Steam"
+    account = _account(root)
+    apply_applications(
+        [make_app(tmp_path / "org.example.App.desktop")],
+        installation=_installation(root),
+        account=account,
+        store=StateStore(":memory:"),
+        steam_status=CLOSED,
+        hooks=_hooks(),
+    )
+    cloud = account.userdata_dir / "config" / "cloudstorage"
+    assert not cloud.exists()
+
+
+def test_import_adds_appid_to_selected_collection(tmp_path):
+    from steam_desktop_importer.steam.collections import CollectionAssignment, load_collections
+
+    from .test_collections import seed_cloud_storage
+
+    root = tmp_path / "Steam"
+    account = _account(root)
+    seed_cloud_storage(account)
+    app = make_app(tmp_path / "org.example.App.desktop")
+    result = apply_applications(
+        [app],
+        installation=_installation(root),
+        account=account,
+        store=StateStore(":memory:"),
+        steam_status=CLOSED,
+        hooks=_hooks(),
+        collections=CollectionAssignment(existing_ids=("uc-BBBB",), create_names=("Desktop",)),
+    )
+    assert result.collection_errors == ()
+    appid = result.imported[0].appid_unsigned
+    document = load_collections(account)
+    linux = next(item for item in document.live_collections() if item.collection_id == "uc-BBBB")
+    assert appid in linux.added
+    created = [item for item in document.live_collections() if item.name == "Desktop"]
+    assert len(created) == 1
+    assert created[0].collection_id.startswith("sdi-")
+    assert appid in created[0].added
+    hidden = next(item for item in document.live_collections() if item.collection_id == "hidden")
+    assert hidden.added == (999,)
+
+
+def test_collection_commit_os_error_is_reported_not_raised(tmp_path, monkeypatch):
+    from steam_desktop_importer.steam import importing as importing_module
+    from steam_desktop_importer.steam.collections import CollectionAssignment
+
+    from .test_collections import seed_cloud_storage
+
+    root = tmp_path / "Steam"
+    account = _account(root)
+    seed_cloud_storage(account)
+    app = make_app(tmp_path / "org.example.App.desktop")
+    def fail_commit(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(importing_module, "commit_collections", fail_commit)
+    result = apply_applications(
+        [app],
+        installation=_installation(root),
+        account=account,
+        store=StateStore(":memory:"),
+        steam_status=CLOSED,
+        hooks=_hooks(),
+        collections=CollectionAssignment(existing_ids=("uc-BBBB",)),
+    )
+    assert result.collection_errors
+    assert "disk full" in result.collection_errors[0]

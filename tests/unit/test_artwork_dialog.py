@@ -33,6 +33,7 @@ class FakeClient:
     def __init__(self, payload: bytes) -> None:
         self._payload = payload
         self.searches: list[str] = []
+        self.downloads: list[int] = []
 
     def __enter__(self):
         return self
@@ -56,7 +57,15 @@ class FakeClient:
                 thumb="https://cdn.example/p.thumb.png",
                 width=600,
                 height=900,
-            )
+            ),
+            GridAsset(
+                id=12,
+                kind="grid",
+                url="https://cdn.example/p2.png",
+                thumb="https://cdn.example/p2.thumb.png",
+                width=600,
+                height=900,
+            ),
         ]
 
     def get_heroes(self, game_id: int):
@@ -80,6 +89,7 @@ class FakeClient:
         path = Path(temp_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(self._payload)
+        self.downloads.append(asset.id)
         return path
 
 
@@ -133,7 +143,7 @@ def test_artwork_dialog_use_selected_downloads_temps(qapp, tmp_path):
     dialog._on_search()
     assert dialog.game_list.count() == 1
     listing = dialog._lists["portrait"]
-    assert listing.count() == 1
+    assert listing.count() == 2
     listing.setCurrentRow(0)
     dialog._lists["icon"].setCurrentRow(0)
     dialog.use_button.click()
@@ -142,6 +152,58 @@ def test_artwork_dialog_use_selected_downloads_temps(qapp, tmp_path):
     assert "portrait" in choice.files
     assert "icon" in choice.files
     assert choice.files["portrait"].read_bytes() == png
+    dialog.close()
+
+
+def test_use_selected_with_no_picks_takes_the_first_in_each_slot(qapp, tmp_path):
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    client = FakeClient(png)
+    art_dir = tmp_path / "art"
+    art_dir.mkdir()
+    dialog = ArtworkDialog(
+        app,
+        art_dir,
+        inline_workers=True,
+        client_factory=lambda: client,
+    )
+    dialog._on_search()
+    assert dialog._lists["portrait"].currentItem() is None
+    assert dialog._lists["icon"].currentItem() is None
+    dialog.use_button.click()
+    choice = dialog.choice()
+    assert choice.action == ACTION_USE
+    assert set(choice.files) == {"portrait", "icon"}
+    assert client.downloads == [11, 22]
+    dialog.close()
+
+
+def test_use_first_matches_ignores_later_picks(qapp, tmp_path):
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    client = FakeClient(png)
+    art_dir = tmp_path / "art"
+    art_dir.mkdir()
+    dialog = ArtworkDialog(
+        app,
+        art_dir,
+        inline_workers=True,
+        client_factory=lambda: client,
+    )
+    dialog._on_search()
+    dialog._lists["portrait"].setCurrentRow(1)
+    client.downloads.clear()
+    dialog.use_first_button.click()
+    choice = dialog.choice()
+    assert choice.action == ACTION_USE
+    assert set(choice.files) == {"portrait", "icon"}
+    assert client.downloads == [11, 22]
     dialog.close()
 
 
@@ -155,4 +217,62 @@ def test_artwork_dialog_cancel_is_skip(qapp, tmp_path):
     )
     dialog.cancel_button.click()
     assert dialog.choice().action == ACTION_SKIP
+    dialog.close()
+
+
+def test_cancel_after_results_still_skips(qapp, tmp_path):
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    dialog = ArtworkDialog(
+        app,
+        tmp_path,
+        inline_workers=True,
+        client_factory=lambda: FakeClient(b""),
+    )
+    dialog._on_search()
+    dialog.cancel_button.click()
+    assert dialog.choice().action == ACTION_SKIP
+    assert dialog.choice().files == {}
+    dialog.close()
+
+
+def test_asset_load_failure_clears_previous_assets(qapp, tmp_path):
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    dialog = ArtworkDialog(
+        app,
+        tmp_path,
+        inline_workers=True,
+        client_factory=lambda: FakeClient(b""),
+    )
+    dialog._on_search()
+    assert dialog._first_assets()
+    dialog._on_assets_failed("boom")
+    assert dialog._first_assets() == {}
+    assert dialog.status.text() == "boom"
+    dialog.close()
+
+
+def test_partial_download_failure_keeps_dialog_open(qapp, tmp_path):
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+
+    class PartialFailClient(FakeClient):
+        def download_asset(self, asset, temp_path):
+            if asset.id == 22:
+                raise RuntimeError("icon failed")
+            return super().download_asset(asset, temp_path)
+
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    dialog = ArtworkDialog(
+        app,
+        tmp_path,
+        inline_workers=True,
+        client_factory=lambda: PartialFailClient(png),
+    )
+    dialog._on_search()
+    dialog.use_first_button.click()
+    assert dialog.choice().action == ACTION_SKIP
+    assert dialog.choice().files == {}
+    assert "Icon: icon failed" in dialog.status.text()
     dialog.close()

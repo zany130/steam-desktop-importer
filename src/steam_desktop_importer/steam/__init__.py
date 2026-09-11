@@ -3,9 +3,11 @@
 Phases 4–6 are read-only against Steam paths. Phase 7 may replace
 ``shortcuts.vdf`` only through :func:`commit_shortcuts` / :func:`apply_applications`.
 Phase 9 may place artwork under ``userdata/.../config/grid/`` only through
-:mod:`steam_desktop_importer.steam.artwork`. Installation and account
-selection is never resolved silently when there is a real choice to make
-(rules 7 and 8).
+:mod:`steam_desktop_importer.steam.artwork`. Phase 12 may replace collection
+cloud-storage JSON only through
+:mod:`steam_desktop_importer.steam.collection_commit`. Installation and
+account selection is never resolved silently when there is a real choice to
+make (rules 7 and 8).
 """
 
 from __future__ import annotations
@@ -37,6 +39,14 @@ from .artwork import (
     grid_dir,
     grid_id,
     place_artwork,
+)
+from .collection_commit import CloudStorageChangedError, commit_collections
+from .collections import (
+    CollectionAssignment,
+    CollectionDocument,
+    CollectionError,
+    SteamCollection,
+    load_collections,
 )
 from .commit import (
     MAX_BACKUPS,
@@ -100,6 +110,10 @@ __all__ = [
     "AccountSelection",
     "AppIdAllocationError",
     "AppIdNotFoundError",
+    "CloudStorageChangedError",
+    "CollectionAssignment",
+    "CollectionDocument",
+    "CollectionError",
     "CommitError",
     "CommitHooks",
     "CommitResult",
@@ -115,6 +129,7 @@ __all__ = [
     "STEAM_NEW_ENTRY_KEYS",
     "ShortcutDocument",
     "ShortcutEntry",
+    "SteamCollection",
     "SteamIsRunningError",
     "SteamRunningStatus",
     "VdfChangedError",
@@ -123,6 +138,7 @@ __all__ = [
     "apply_applications",
     "artwork_filename",
     "commit_artwork_files",
+    "commit_collections",
     "commit_shortcuts",
     "detect_steam_running",
     "discover_accounts",
@@ -137,6 +153,7 @@ __all__ = [
     "int32_to_uint32",
     "is_steam_root",
     "list_existing_shortcuts",
+    "load_collections",
     "lock_path_for",
     "normalize_exe",
     "place_artwork",

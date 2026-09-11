@@ -1,8 +1,9 @@
-"""Import selected desktop entries through a safe VDF commit (Phases 7–9).
+"""Import selected desktop entries through a safe VDF commit (Phases 7–12).
 
 §26 / §18.4 order: prepare artwork temps, mutate the in-memory VDF, commit
-the VDF, persist mappings, then place ``grid/`` files. Artwork failures do
-not roll back a successful shortcut write.
+the VDF, persist mappings, then place ``grid/`` files. Optional collection
+membership is applied last. Artwork and collection failures do not roll
+back a successful shortcut write.
 
 Possible Existing Match is never auto-owned. Relink is an explicit call with
 the existing unsigned AppID.
@@ -11,6 +12,7 @@ the existing unsigned AppID.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +27,9 @@ from ..state.status import (
 from ..state.store import StateStore
 from .appid import allocate_appid
 from .artwork import SLOT_ICON, commit_artwork_files, destination_for
-from .commit import CommitHooks, CommitResult, commit_shortcuts
+from .collection_commit import commit_collections
+from .collections import CollectionAssignment, CollectionDocument, CollectionError
+from .commit import CommitError, CommitHooks, CommitResult, commit_shortcuts
 from .running import SteamRunningStatus
 from .shortcut_identities import ExistingShortcut, shortcuts_vdf_path
 from .shortcuts import ShortcutDocument, format_launch_options
@@ -55,12 +59,13 @@ class ImportedShortcut:
 
 @dataclass(frozen=True)
 class ImportResult:
-    """VDF commit plus any state or artwork steps that could not finish."""
+    """VDF commit plus any state, artwork, or collection steps that could not finish."""
 
     commit: CommitResult
     imported: tuple[ImportedShortcut, ...]
     state_errors: tuple[str, ...] = ()
     artwork_errors: tuple[str, ...] = ()
+    collection_errors: tuple[str, ...] = ()
 
 
 def _fields_for(app: DesktopApplication) -> tuple[str, str, str, str]:
@@ -202,6 +207,41 @@ def _persist_mappings(
     return tuple(errors)
 
 
+def _commit_collection_membership(
+    account: SteamAccount,
+    appids: Sequence[int],
+    assignment: CollectionAssignment | None,
+    *,
+    steam_status: SteamRunningStatus | None,
+    hooks: CommitHooks | None,
+) -> tuple[str, ...]:
+    """Add imported AppIDs to collections. Failures do not roll back the VDF."""
+    if assignment is None or assignment.is_empty():
+        return ()
+    errors: list[str] = []
+    try:
+        document = CollectionDocument.load(account)
+        namespace_path = document.namespace_path
+        index_path = document.index_path
+        if namespace_path is None or index_path is None:
+            return ("collections document has no destination paths",)
+        before_entries = deepcopy(document.entries)
+        before_index = deepcopy(document.index)
+        errors.extend(document.apply_assignment(assignment, appids))
+        if document.entries == before_entries and document.index == before_index:
+            return tuple(errors)
+        commit_collections(
+            document,
+            original_namespace_bytes=document.original_namespace_bytes,
+            original_index_bytes=document.original_index_bytes,
+            steam_status=steam_status,
+            hooks=hooks,
+        )
+    except (CollectionError, CommitError, OSError) as error:
+        errors.append(str(error))
+    return tuple(errors)
+
+
 def apply_applications(
     applications: Sequence[DesktopApplication],
     *,
@@ -214,12 +254,15 @@ def apply_applications(
     original_bytes: bytes | None = None,
     icon_paths: Mapping[str, str] | None = None,
     artwork_files: Mapping[str, Mapping[str, Path]] | None = None,
+    collections: CollectionAssignment | None = None,
 ) -> ImportResult:
-    """Mutate, commit, then persist mappings and place prepared artwork.
+    """Mutate, commit, then persist mappings, place artwork, and optionally collect.
 
     The VDF is not touched if planning fails. After a successful commit,
-    mapping and artwork failures are returned rather than rolling back
-    Steam's file. Artwork is committed last (IMPLEMENTATION.md §18.4).
+    mapping, artwork, and collection failures are returned rather than
+    rolling back Steam's shortcut file. Artwork is committed last among
+    shortcut-adjacent writes (IMPLEMENTATION.md §18.4); collections are a
+    separate cloud-storage document after that.
     """
     if not applications:
         raise ImportPlanningError("no applications selected")
@@ -273,11 +316,19 @@ def apply_applications(
     )
     appids = {item.desktop_id: item.appid_unsigned for item in planned}
     artwork_errors = commit_artwork_files(account, appids, prepared_art)
+    collection_errors = _commit_collection_membership(
+        account,
+        list(appids.values()),
+        collections,
+        steam_status=steam_status,
+        hooks=hooks,
+    )
     return ImportResult(
         commit=commit,
         imported=tuple(planned),
         state_errors=state_errors,
         artwork_errors=artwork_errors,
+        collection_errors=collection_errors,
     )
 
 
@@ -292,6 +343,7 @@ def relink_application(
     hooks: CommitHooks | None = None,
     icon_paths: Mapping[str, str] | None = None,
     artwork_files: Mapping[str, Mapping[str, Path]] | None = None,
+    collections: CollectionAssignment | None = None,
 ) -> ImportResult:
     """Take ownership of an existing unmanaged shortcut. Never allocates."""
     vdf_path = shortcuts_vdf_path(account)
@@ -330,6 +382,7 @@ def relink_application(
         hooks=hooks,
         icon_paths=icon_paths,
         artwork_files=artwork_files,
+        collections=collections,
     )
 
 

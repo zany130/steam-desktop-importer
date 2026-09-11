@@ -1,11 +1,13 @@
-"""Main window (IMPLEMENTATION.md §25, Phases 3–9).
+"""Main window (IMPLEMENTATION.md §25, Phases 3–12).
 
 Import and Relink commit ``shortcuts.vdf`` through the Phase 7 transaction,
-then place selected SteamGridDB artwork under ``config/grid/``. They stay
-disabled while Steam is running, the probe is uncertain, or no
-installation+account is selected, unless Steam-running detection is
-overridden for a false positive. Running status is polled while the window
-is open, and is re-checked when Import or Relink is clicked.
+then place selected SteamGridDB artwork under ``config/grid/``. Optional
+collection membership is written afterwards through
+``steam/collection_commit.py``. They stay disabled while Steam is running,
+the probe is uncertain, or no installation+account is selected, unless
+Steam-running detection is overridden for a false positive. Running status
+is polled while the window is open, and is re-checked when Import or Relink
+is clicked.
 """
 
 from __future__ import annotations
@@ -25,6 +27,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -32,6 +36,7 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStatusBar,
     QTableView,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -53,6 +58,8 @@ from ..state import (
     likely_existing_match,
 )
 from ..steam import (
+    CollectionAssignment,
+    CollectionError,
     CommitError,
     CommitHooks,
     ImportPlanningError,
@@ -61,6 +68,7 @@ from ..steam import (
     detect_steam_running,
     first_import_candidate,
     list_existing_shortcuts,
+    load_collections,
     relink_application,
     select_account,
     select_installation,
@@ -133,6 +141,7 @@ class MainWindow(QMainWindow):
         self._installations: list[tuple[SteamInstallation, list[SteamAccount]]] = []
         self._selected_installation: SteamInstallation | None = None
         self._selected_account: SteamAccount | None = None
+        self._collections_identity: tuple[str, int] | None = None
         self._running: SteamRunningStatus | None = None
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
@@ -295,10 +304,47 @@ class MainWindow(QMainWindow):
             "creating a new one."
         )
 
+        self.collection_list = QListWidget()
+        self.collection_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.collection_list.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self.collection_list.setToolTip(
+            "Optional. Checked collections receive the imported shortcuts. "
+            "Steam's Hidden and tag-derived collections are omitted. Nothing "
+            "is added unless you check a box or type a new name."
+        )
+        self.collection_filter = QLineEdit()
+        self.collection_filter.setPlaceholderText("Filter collections…")
+        self.collection_filter.setClearButtonEnabled(True)
+        self.collection_filter.setToolTip(
+            "Hide collections whose names do not match."
+        )
+        self.collection_new = QLineEdit()
+        self.collection_new.setPlaceholderText("New collection name (optional)")
+        self.collection_new.setToolTip(
+            "Creates a collection if no assignable collection already has this "
+            "name. Left blank, no collection is created."
+        )
+
+        collections_page = QWidget()
+        collections_layout = QVBoxLayout(collections_page)
+        collections_layout.setContentsMargins(0, 8, 0, 0)
+        hint = QLabel("Optional. Checked collections receive the imported shortcuts.")
+        hint.setWordWrap(True)
+        collections_layout.addWidget(hint)
+        collections_layout.addWidget(self.collection_filter)
+        collections_layout.addWidget(self.collection_list, stretch=1)
+        collections_layout.addWidget(self.collection_new)
+
+        self.detail_tabs = QTabWidget()
+        self.detail_tabs.addTab(self.detail, "Details")
+        self.detail_tabs.addTab(collections_page, "Collections")
+
         bottom = QWidget()
         bottom_layout = QVBoxLayout(bottom)
         bottom_layout.setContentsMargins(8, 0, 8, 8)
-        bottom_layout.addWidget(self.detail)
+        bottom_layout.addWidget(self.detail_tabs, stretch=1)
         actions = QHBoxLayout()
         actions.addWidget(self.acknowledge)
         actions.addStretch()
@@ -307,11 +353,12 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.relink_button)
         actions.addWidget(self.import_button)
         bottom_layout.addLayout(actions)
+        bottom.setMinimumHeight(220)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(self.table)
         splitter.addWidget(bottom)
-        splitter.setStretchFactor(0, 4)
+        splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 1)
 
         central = QWidget()
@@ -349,6 +396,7 @@ class MainWindow(QMainWindow):
         self.acknowledge.clicked.connect(self._acknowledge_collision)
         self.import_button.clicked.connect(self._import_selected)
         self.relink_button.clicked.connect(self._relink_selected)
+        self.collection_filter.textChanged.connect(self._filter_collections)
         self.install_combo.currentIndexChanged.connect(self._on_install_chosen)
         self.account_combo.currentIndexChanged.connect(self._on_account_chosen)
         self.table.selectionModel().currentRowChanged.connect(self._on_row_changed)
@@ -854,7 +902,7 @@ class MainWindow(QMainWindow):
             f"Write {len(rows)} shortcut(s) to\n{shortcuts_vdf_path(account)}\n"
             f"for {account_label(account)}?\n\n"
             "Steam must stay closed. A timestamped backup of shortcuts.vdf "
-            f"will be created.{extra}",
+            f"will be created.{self._collection_confirm_suffix()}{extra}",
         ):
             return
         apps = [row.app for row in rows]
@@ -874,6 +922,7 @@ class MainWindow(QMainWindow):
                     steam_status=self._commit_detect_steam(),
                     hooks=self._commit_hooks(),
                     artwork_files=artwork_files,
+                    collections=self._collection_assignment(),
                 )
         except (CommitError, ImportPlanningError) as error:
             QMessageBox.warning(self, "Import failed", str(error))
@@ -917,7 +966,7 @@ class MainWindow(QMainWindow):
             "Relink existing shortcut",
             f"Take ownership of AppID {match.appid_unsigned} "
             f"({match.name}) for {app.desktop_id}?\n\n"
-            "A new shortcut will not be created.",
+            f"A new shortcut will not be created.{self._collection_confirm_suffix()}",
         ):
             return
         try:
@@ -937,6 +986,7 @@ class MainWindow(QMainWindow):
                     steam_status=self._commit_detect_steam(),
                     hooks=self._commit_hooks(),
                     artwork_files=artwork_files,
+                    collections=self._collection_assignment(),
                 )
         except (CommitError, ImportPlanningError) as error:
             QMessageBox.warning(self, "Relink failed", str(error))
@@ -983,6 +1033,11 @@ class MainWindow(QMainWindow):
             notes.append(
                 "Artwork errors (shortcuts remain valid):\n"
                 + "\n".join(result.artwork_errors)
+            )
+        if result.collection_errors:
+            notes.append(
+                "Collection errors (shortcuts remain valid):\n"
+                + "\n".join(result.collection_errors)
             )
         extra = ("\n\n" + "\n\n".join(notes)) if notes else ""
         QMessageBox.information(
@@ -1072,6 +1127,111 @@ class MainWindow(QMainWindow):
             self._shortcuts_error = str(error)
             return []
 
+    def _filter_collections(self) -> None:
+        needle = self.collection_filter.text().strip().casefold()
+        for index in range(self.collection_list.count()):
+            item = self.collection_list.item(index)
+            if item is None:
+                continue
+            if not needle:
+                item.setHidden(False)
+                continue
+            item.setHidden(needle not in item.text().casefold())
+
+    def _checked_collection_ids(self) -> list[str]:
+        checked: list[str] = []
+        for index in range(self.collection_list.count()):
+            item = self.collection_list.item(index)
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
+                collection_id = item.data(Qt.ItemDataRole.UserRole)
+                if isinstance(collection_id, str) and collection_id:
+                    checked.append(collection_id)
+        return checked
+
+    def _collection_assignment(self) -> CollectionAssignment:
+        name = self.collection_new.text().strip()
+        return CollectionAssignment(
+            existing_ids=tuple(self._checked_collection_ids()),
+            create_names=(name,) if name else (),
+        )
+
+    def _collection_confirm_suffix(self) -> str:
+        assignment = self._collection_assignment()
+        if assignment.is_empty():
+            return ""
+        names: list[str] = []
+        for index in range(self.collection_list.count()):
+            item = self.collection_list.item(index)
+            if item is not None and item.checkState() == Qt.CheckState.Checked:
+                names.append(item.text())
+        typed = self.collection_new.text().strip()
+        if typed:
+            names.append(f'new "{typed}"')
+        return "\n\nAlso add to collection(s): " + ", ".join(names)
+
+    def _reload_collections(self) -> None:
+        current_identity = (
+            (
+                self._selected_installation.key,
+                self._selected_account.account_id32,
+            )
+            if self._selected_installation is not None and self._selected_account is not None
+            else None
+        )
+        previously = (
+            set(self._checked_collection_ids())
+            if current_identity == self._collections_identity
+            else set()
+        )
+        self._collections_identity = current_identity
+        self.collection_list.clear()
+        if self._selected_account is None:
+            self._collections_identity = None
+            self.collection_list.setEnabled(False)
+            self.collection_filter.setEnabled(False)
+            self.collection_new.setEnabled(False)
+            return
+        self.collection_list.setEnabled(True)
+        self.collection_filter.setEnabled(True)
+        self.collection_new.setEnabled(True)
+        try:
+            document = load_collections(self._selected_account)
+        except CollectionError as error:
+            placeholder = QListWidgetItem(f"Could not read collections ({error})")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.collection_list.addItem(placeholder)
+            self._filter_collections()
+            return
+        collections = sorted(
+            document.assignable_collections(),
+            key=lambda item: item.name.casefold(),
+        )
+        if not collections:
+            placeholder = QListWidgetItem("No collections yet — type a name to create one")
+            placeholder.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.collection_list.addItem(placeholder)
+            self._filter_collections()
+            return
+        for collection in collections:
+            item = QListWidgetItem(collection.name)
+            item.setData(Qt.ItemDataRole.UserRole, collection.collection_id)
+            item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsSelectable
+            )
+            checked = (
+                Qt.CheckState.Checked
+                if collection.collection_id in previously
+                else Qt.CheckState.Unchecked
+            )
+            item.setCheckState(checked)
+            item.setToolTip(
+                f"{collection.collection_id} — {len(collection.added)} games"
+            )
+            self.collection_list.addItem(item)
+        self._filter_collections()
+
     def _refresh_import_statuses(self) -> None:
         existing = self._existing_shortcuts()
         statuses = classify_applications(
@@ -1082,6 +1242,7 @@ class MainWindow(QMainWindow):
             existing,
         )
         self._model.set_import_statuses(statuses)
+        self._reload_collections()
         self._update_banner()
         self._update_import_actions()
         current = self.table.currentIndex()

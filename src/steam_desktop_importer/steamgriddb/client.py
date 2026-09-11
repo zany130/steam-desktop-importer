@@ -31,8 +31,11 @@ from .models import ArtworkKind, GameResult, GridAsset
 __all__ = [
     "DEFAULT_BASE_URL",
     "SteamGridDBClient",
+    "asset_download_url",
     "is_http_url",
 ]
+
+_ICON_MIMES = frozenset({"image/vnd.microsoft.icon", "image/x-icon"})
 
 DEFAULT_BASE_URL = "https://www.steamgriddb.com/api/v2"
 _CONNECT_TIMEOUT = 5.0
@@ -46,6 +49,21 @@ _BACKOFF_SECONDS = (1.0, 2.0, 4.0)
 def is_http_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def asset_download_url(asset: GridAsset) -> str:
+    """URL whose bytes we will sniff and place.
+
+    SteamGridDB icons are often Windows ``.ico`` files. Those fail the
+    PNG/JPEG/GIF/WebP sniff used before writing ``grid/``. The ``thumb`` is
+    a PNG render of the same icon (what the preview already shows), so
+    downloads use that instead of the ``.ico``.
+    """
+    mime = asset.mime.strip().lower()
+    path = urlparse(asset.url).path.lower()
+    if (mime in _ICON_MIMES or path.endswith(".ico")) and asset.thumb:
+        return asset.thumb
+    return asset.url
 
 
 def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
@@ -218,11 +236,15 @@ class SteamGridDBClient:
         return self._assets_from_data(payload, ArtworkKind.ICON)
 
     def download_asset(self, asset: GridAsset, temp_path, *, max_bytes: int | None = None):
-        """Download ``asset.url`` to ``temp_path``. See :mod:`.download`."""
+        """Download artwork to ``temp_path``. See :mod:`.download`.
+
+        ``.ico`` icons are fetched via :func:`asset_download_url` so the
+        placed file is the PNG thumb Steam can actually use.
+        """
         from .download import download_url
 
         return download_url(
-            asset.url,
+            asset_download_url(asset),
             temp_path,
             session=self.session,
             timeout=(self.connect_timeout, self.read_timeout),

@@ -3,12 +3,15 @@
 Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 
 **Current state: Phases 0–10 complete on native Steam. OPEN-4 resolved.
-445 tests passing.**
+Phase 12 collection writes are implemented against fixtures; the live Steam
+UI gate is still pending. Phase 11 (Flatpak Steam) is not started.
+469 tests passing.**
 Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
 artwork is placed under a userdata `config/grid/` only through
-`steam/artwork.py`. Unit tests use `tmp_path` fake userdata. The Phase 10
-Konsole gate is recorded in `docs/PHASE10_NATIVE_RELEASE_GATE.md`. TEST-005
-hot reload remains informational.
+`steam/artwork.py`. Collection JSON is replaced only through
+`steam/collection_commit.py`. Unit tests use `tmp_path` fake userdata. The
+Phase 10 Konsole gate is recorded in `docs/PHASE10_NATIVE_RELEASE_GATE.md`.
+TEST-005 hot reload remains informational.
 
 Legend: `[x]` done · `[ ]` not started · `[~]` partial
 
@@ -381,7 +384,6 @@ the temp copy updated, and the real userdata mtime/size/bytes were unchanged.
 
 - The development host's real `shortcuts.vdf` (961 entries)
 - The development host's live `config/grid/` (Phase 9 unit tests use tmp userdata)
-- Collections (§24)
 
 ## Phase 8 — SteamGridDB client (§21–§23)
 
@@ -416,7 +418,9 @@ temps are placed into `<userdata>/config/grid/` *after* a successful VDF
 commit. A missing API key keeps import shortcut-only.
 
 - [x] Editable SteamGridDB search, prefilled with the display name
-- [x] Previews, per-slot selection, skip, skip remaining, cancel=skip
+- [x] Previews, per-slot selection, skip, skip remaining, cancel=skip;
+      Use first matches (and Use selected with no picks) takes the first
+      result in each slot when the user does not care which art is used
 - [x] Unsigned 32-bit decimal naming (`<id>p`, `<id>`, `_hero`, `_logo`, `_icon`)
 - [x] Not the derived 64-bit `game_id` (rule 13)
 - [x] Persistent shortcut `icon` is the absolute `_icon` path (§20)
@@ -429,7 +433,6 @@ commit. A missing API key keeps import shortcut-only.
 
 ### Not written, on purpose
 
-- Collections (§24)
 - Artwork-only refresh while Steam is running (§28; later)
 
 Live `config/grid/` placement on this host is the Phase 10 native pass,
@@ -453,11 +456,29 @@ Recorded in `docs/PHASE10_NATIVE_RELEASE_GATE.md`.
 - [x] Post-Steam re-import: AppID `3511661831`, `LastPlayTime` kept, 983/983 byte-identical including Steam's recasing; 980/980 third-party vs pre-Konsole baseline
 - [ ] TEST-005 artwork hot reload (informational; does not block native MVP)
 
+## Phase 12 — Steam collections (§24)
+
+Implemented against fixtures. Live Steam UI confirmation is still required
+before treating this as settled. Recorded in `docs/PHASE12_COLLECTIONS.md`.
+
+- [x] Cloud-storage JSON is the source of truth; `tags = {}` is not a collection
+- [x] `localconfig.vdf` is not written
+- [x] Unsigned 32-bit AppIDs in `added` (not 64-bit game IDs)
+- [x] Steam-closed atomic replace through `steam/collection_commit.py` only
+- [x] Backup + parse-back; collection failure does not roll back the VDF
+- [x] No default collection; user must check an existing one or type a name
+- [x] Collections tab (filter + full-height checklist); Details stays the default
+- [x] `hidden` and `from-tag-*` are not assignable
+- [x] New collections use an `sdi-` prefix; name match reuses an existing one
+- [x] Unrelated namespace keys and unselected collections are left intact
+- [x] `debug collections` is read-only
+- [ ] Live Steam: add a shortcut to a collection, open Steam, confirm the
+      shelf; re-import; confirm unrelated collections survive
+
 ## Not started
 
 Phase 11. Specifically **not** implemented, as instructed:
 
-- Steam collections/categories (§24, rule 20) — out of scope for MVP
 - Any Flatpak permission modification (§11, rule 23)
 - Flatpak Steam matrix (Phase 11)
 
