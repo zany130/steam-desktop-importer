@@ -50,7 +50,6 @@ The importer needs broad host filesystem access, Steam configuration access, app
 
 ### 2.3 Out of scope for the MVP
 
-- Steam collection/category editing
 - automatic discovery of unintegrated AppImages
 - terminal launcher recreation without a tested terminal adapter
 - full FreeDesktop D-Bus activation
@@ -58,6 +57,9 @@ The importer needs broad host filesystem access, Steam configuration access, app
 - direct `shortcuts.vdf` modification while Steam is running
 - silently choosing between multiple plausible Steam accounts
 - treating undocumented Steam fields as public/stable Valve APIs
+
+Steam collection/category editing is **Phase 12** (post-MVP). It is not
+implemented by writing `shortcuts.vdf` `tags`.
 
 ---
 
@@ -1055,25 +1057,44 @@ download_asset(asset, temp_path)
 
 # 24. Collections / Categories
 
-Do **not** implement Steam collection/category editing in the MVP.
+Steam library collections are **Phase 12**, after the native-Steam MVP.
 
-Current maintained tools treat `cloud-storage-namespace-*.json` as authoritative and `localconfig.vdf` as a cache, but this remains current reverse-engineered behavior rather than a public Valve storage contract.
-
-Future collection work needs a separate investigation of:
-
-- file format;
-- synchronization;
-- concurrent Steam behavior;
-- cloud conflicts;
-- safe mutation.
-
-For new shortcuts:
+Do **not** present `shortcuts.vdf` `tags` as collection creation. For new
+shortcuts:
 
 ```text
 tags = {}
 ```
 
-Do not present that as modern collection creation.
+Existing `tags` are still preserved on unrelated entries.
+
+Current clients store collections in userdata cloud storage:
+
+```text
+<userdata>/<account_id32>/config/cloudstorage/cloud-storage-namespace-1.json
+```
+
+with an index in `cloud-storage-namespaces.json`. Each live collection is a
+`user-collections.<id>` record whose `value` is a JSON string
+`{id, name, added, removed}`. `added` holds unsigned 32-bit AppIDs, including
+high-bit non-Steam IDs. This is observed behavior, not a public Valve API.
+See `docs/PHASE12_COLLECTIONS.md`.
+
+Rules for this importer:
+
+- Steam must be closed (same gate as `shortcuts.vdf`).
+- Replace the namespace JSON (and the namespaces index) only through
+  `steam/collection_commit.py`, with backup, parse-back, and `os.replace`.
+- Do not write `localconfig.vdf`.
+- Do not add imports to Steam's `hidden` collection or `from-tag-*`
+  collections.
+- Do not create a collection unless the user typed a name or checked an
+  existing one.
+- Collection-write failures must not roll back a successful shortcut commit.
+- New collections use an `sdi-` id prefix.
+
+Until a live Steam UI gate is recorded, treat collection writes as
+**experimental observed behavior**.
 
 ---
 
@@ -1494,6 +1515,18 @@ Behind an experimental feature flag, test:
 
 Do not advertise full Flatpak Steam support until this matrix passes.
 
+## Phase 12 — Steam collections
+
+Optional membership in Steam library collections after a successful shortcut
+commit. Native Steam, Steam closed. Cloud-storage JSON only; not `tags`.
+
+1. Read `cloud-storage-namespace-*.json` / `cloud-storage-namespaces.json`.
+2. Offer existing assignable collections; never invent one by default.
+3. Add the new unsigned 32-bit AppID to `added`.
+4. Atomic replace with backup; do not write `localconfig.vdf`.
+5. Live Steam UI confirmation is a release gate for this phase, separate
+   from the native shortcut gate in Phase 10.
+
 ---
 
 # 32. MUST TEST Items
@@ -1691,7 +1724,8 @@ Flatpak Steam may remain experimental.
 17. Do validate a temporary VDF before replacement.
 18. Do fsync the parent directory when maximum Linux crash durability is required.
 19. Do preserve unknown existing VDF data whenever possible.
-20. Do not implement collections in MVP.
+20. Do not present `tags = {}` as collection creation. Collection writes go
+    through cloud storage with Steam closed (Phase 12).
 21. Do not hardcode a guessed SteamGridDB request delay as an official rate limit.
 22. Do not assume file extension must always match payload when SteamGridDB documents a Steam compatibility rename.
 23. Do not automatically weaken Flatpak Steam's sandbox.
@@ -1739,7 +1773,7 @@ Strong enough for MVP but not a public Valve contract:
 - first-import candidate uses CRC32 of importer namespace + desktop ID;
 - deterministic collision suffixing;
 - NoDisplay hidden by default but revealable;
-- collections omitted;
+- collections written through cloud storage (Phase 12), never via `tags`;
 - combined import requires Steam closed;
 - Flatpak Steam remains experimental;
 - uncertain VDF fields remain empty.

@@ -130,7 +130,9 @@ class ArtworkDialog(QDialog):
         layout.addWidget(
             QLabel(
                 "Search SteamGridDB, pick a game, then choose artwork for each "
-                "slot. Skip leaves the shortcut without custom art."
+                "slot. If you do not care which art is used, Use first matches "
+                "adds the first result in each slot. Skip or Cancel leaves the "
+                "shortcut without custom art."
             )
         )
 
@@ -175,11 +177,21 @@ class ArtworkDialog(QDialog):
         buttons = QHBoxLayout()
         self.skip_button = QPushButton("Skip artwork")
         self.skip_remaining_button = QPushButton("Skip remaining apps")
+        self.use_first_button = QPushButton("Use first matches")
+        self.use_first_button.setToolTip(
+            "Add the first SteamGridDB result in each slot. Use this when you "
+            "do not care which artwork is picked."
+        )
         self.use_button = QPushButton("Use selected")
+        self.use_button.setToolTip(
+            "Download the highlighted image in each tab. If nothing is "
+            "highlighted, the first result in each slot is used."
+        )
         self.cancel_button = QPushButton("Cancel")
         buttons.addWidget(self.skip_button)
         buttons.addWidget(self.skip_remaining_button)
         buttons.addStretch(1)
+        buttons.addWidget(self.use_first_button)
         buttons.addWidget(self.use_button)
         buttons.addWidget(self.cancel_button)
         layout.addLayout(buttons)
@@ -189,6 +201,7 @@ class ArtworkDialog(QDialog):
         self.game_list.itemSelectionChanged.connect(self._on_game_selected)
         self.skip_button.clicked.connect(self._skip)
         self.skip_remaining_button.clicked.connect(self._skip_remaining)
+        self.use_first_button.clicked.connect(self._use_first_matches)
         self.use_button.clicked.connect(self._use_selected)
         self.cancel_button.clicked.connect(self._skip)
         self.resize(900, 640)
@@ -215,6 +228,7 @@ class ArtworkDialog(QDialog):
         self.search_button.setEnabled(not busy)
         self.search_edit.setEnabled(not busy)
         self.game_list.setEnabled(not busy)
+        self.use_first_button.setEnabled(not busy)
         self.use_button.setEnabled(not busy)
         self.skip_button.setEnabled(not busy)
         self.skip_remaining_button.setEnabled(not busy)
@@ -310,7 +324,10 @@ class ArtworkDialog(QDialog):
             listing.blockSignals(False)
         self.preview.setText("Select an image to preview.")
         self.preview.setPixmap(QPixmap())
-        self.status.setText("Choose artwork in each tab, or skip a slot.")
+        self.status.setText(
+            "Choose artwork, or Use first matches if you do not care which "
+            "result is picked."
+        )
 
     def _selected_asset(self) -> GridAsset | None:
         listing = self._lists[SLOTS[self.tabs.currentIndex()]]
@@ -361,6 +378,8 @@ class ArtworkDialog(QDialog):
 
     def _on_preview_failed(self, message: str) -> None:
         self._set_busy(False)
+        self._preview_bytes = None
+        self.preview.setPixmap(QPixmap())
         self.preview.setText("Preview unavailable.")
         self.status.setText(message)
 
@@ -379,24 +398,54 @@ class ArtworkDialog(QDialog):
                 chosen[slot] = asset
         return chosen
 
+    def _first_assets(self) -> dict[str, GridAsset]:
+        """First SteamGridDB result in each slot that has any artwork."""
+        chosen: dict[str, GridAsset] = {}
+        for slot in SLOTS:
+            assets = self._assets.get(slot) or []
+            if assets:
+                chosen[slot] = assets[0]
+                continue
+            listing = self._lists[slot]
+            if listing.count() == 0:
+                continue
+            asset = listing.item(0).data(Qt.ItemDataRole.UserRole)
+            if isinstance(asset, GridAsset):
+                chosen[slot] = asset
+        return chosen
+
     def _use_selected(self) -> None:
+        self._download_assets(self._selections() or self._first_assets())
+
+    def _use_first_matches(self) -> None:
+        self._download_assets(self._first_assets())
+
+    def _download_assets(self, chosen: dict[str, GridAsset]) -> None:
         if self._busy:
             return
-        chosen = self._selections()
         if not chosen:
-            self._skip()
+            self.status.setText("No artwork available to use.")
             return
-        self._set_busy(True, "Downloading selected artwork…")
+        self._set_busy(True, "Downloading artwork…")
         dest_dir = self._dest_dir
         desktop_id = self._app.desktop_id
 
         def work() -> dict[str, Path]:
             def download(client: SteamGridDBClient) -> dict[str, Path]:
                 files: dict[str, Path] = {}
+                errors: list[str] = []
                 for slot, asset in chosen.items():
                     path = dest_dir / f"{desktop_id}_{slot}_{asset.id}"
-                    client.download_asset(asset, path)
+                    try:
+                        client.download_asset(asset, path)
+                    except Exception as error:  # noqa: BLE001 — keep other slots
+                        errors.append(f"{_TAB_LABELS[slot]}: {error}")
+                        continue
                     files[slot] = path
+                if not files:
+                    raise RuntimeError(
+                        errors[0] if errors else "Nothing could be downloaded."
+                    )
                 return files
 
             return self._with_client(download)

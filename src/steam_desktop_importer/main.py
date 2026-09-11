@@ -6,7 +6,7 @@ ad-hoc scripts that guess the first userdata directory".
 Implemented: ``debug roots``, ``debug scan``, ``debug desktop-entry``,
 ``debug launch``, ``debug steam``, ``debug identity``,
 ``debug dump-shortcuts``, ``debug snapshot-shortcuts``,
-``debug compare-snapshots`` and ``debug steamgriddb``.
+``debug compare-snapshots``, ``debug collections`` and ``debug steamgriddb``.
 
 ``debug launch`` prints the command a shortcut *would* use. It never executes
 it and never writes to Steam. ``debug steam`` reads Steam's configuration and
@@ -14,6 +14,8 @@ never writes to it.
 
 With no subcommand the PySide6 GUI starts. Import writes ``shortcuts.vdf``
 only through the Phase 7 transaction, and only while Steam is closed.
+Optional collection membership is written afterwards through
+``steam/collection_commit.py``.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from .state import (
     import_status,
 )
 from .steam import (
+    CollectionError,
     ShortcutDocument,
     allocate_appid,
     detect_steam_running,
@@ -48,6 +51,7 @@ from .steam import (
     game_id_64,
     grid_dir,
     list_existing_shortcuts,
+    load_collections,
     select_account,
     select_installation,
     shortcuts_vdf_path,
@@ -475,6 +479,35 @@ def _print_snapshot_shortcuts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_collections(args: argparse.Namespace) -> int:
+    """List live Steam collections. Read-only; never writes."""
+    installation, account, status = _debug_target_account(args)
+    if status != 0 or account is None or installation is None:
+        return 1
+    try:
+        document = load_collections(account)
+    except CollectionError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    path = document.namespace_path
+    print(f"installation        {installation.key}")
+    print(f"account             {account.account_id32}")
+    print(f"namespace           {document.namespace_id}")
+    print(f"namespace file      {path}")
+    print(f"index file          {document.index_path}")
+    live = document.live_collections()
+    assignable = [item for item in live if item.assignable]
+    print(f"live collections    {len(live)}")
+    print(f"assignable          {len(assignable)}")
+    for collection in live:
+        flag = "assignable" if collection.assignable else "skipped"
+        print(
+            f"  {collection.collection_id:40} {flag:10} "
+            f"added={len(collection.added):<5} {collection.name}"
+        )
+    return 0
+
+
 def _print_compare_snapshots(args: argparse.Namespace) -> int:
     """Compare two snapshot JSON files. Exit 1 if unmanaged content changed."""
     before = snapshot_from_json(Path(args.before).read_text(encoding="utf-8"))
@@ -712,6 +745,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="unsigned AppID owned by this importer; repeatable",
     )
     compare.set_defaults(func=_print_compare_snapshots)
+
+    collections = debug_commands.add_parser(
+        "collections",
+        help="list Steam library collections (Phase 12); read-only, never writes",
+    )
+    collections.add_argument("--steam-installation", help="SteamInstallation.key")
+    collections.add_argument("--account", type=int, help="32-bit Steam account ID")
+    collections.set_defaults(func=_print_collections)
 
     sgdb = debug_commands.add_parser(
         "steamgriddb",

@@ -8,15 +8,16 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0–10 are implemented** on native Steam. Phase 10 imported Konsole,
-Steam showed the shortcut with the right artwork and launched it, and a
-re-import after Steam was killed kept AppID `3511661831` with third-party
-shortcuts intact. The Flatpak Steam matrix (Phase 11) is not started.
+**Phases 0–10 are implemented** on native Steam. Phase 12 can add imported
+shortcuts to Steam library collections. Phase 11 (Flatpak Steam) is not
+started.
 
 The GUI can import selected applications into `shortcuts.vdf` when Steam is
 closed. With `SGDB_API_KEY` (or a saved key), it can search SteamGridDB,
 preview artwork, and write selected images into the account's `config/grid/`
 directory after the VDF commit. Without a key, import is shortcut-only.
+Checked collections (or a typed new name) are written afterwards into
+Steam's cloud-storage JSON; they are never invented by default.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -32,6 +33,7 @@ directory after the VDF commit. Without a key, import is shortcut-only.
 | 9 | Artwork UI and `grid/` placement | done |
 | 10 | Native Steam release gate | done |
 | 11 | Flatpak Steam experimental adapter | not started |
+| 12 | Steam collections | implemented (fixture-tested; live UI gate pending) |
 
 See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
 open issues.
@@ -70,6 +72,9 @@ steam-desktop-importer debug dump-shortcuts
 # Fingerprint shortcuts.vdf + grid/ without names. Read-only; never writes.
 steam-desktop-importer debug snapshot-shortcuts > /tmp/sdi-before.json
 steam-desktop-importer debug compare-snapshots /tmp/sdi-before.json /tmp/sdi-after.json --ignore-appid 3511661831
+
+# List Steam library collections. Read-only; never writes.
+steam-desktop-importer debug collections
 
 # Search SteamGridDB. Needs SGDB_API_KEY or a saved key. Never writes Steam.
 steam-desktop-importer debug steamgriddb search Kate
@@ -177,5 +182,7 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
   `userdata/` is the source of truth, so an account missing from
   `loginusers.vdf` is still offered and a malformed file degrades to "no
   hints" rather than an error.
-- Steam collections are not implemented.
+- Steam collections are written to cloud-storage JSON while Steam is closed,
+  never by stuffing names into `shortcuts.vdf` `tags`. Nothing is added
+  unless you check a collection or type a new name.
 - Flatpak Steam sandbox permissions are never modified.

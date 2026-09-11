@@ -11,12 +11,14 @@ from steam_desktop_importer.steamgriddb import (
     ENV_KEY,
     AuthenticationError,
     GameResult,
+    GridAsset,
     InvalidResponseError,
     MissingAPIKeyError,
     NotFoundError,
     RateLimitError,
     SteamGridDBClient,
     SteamGridDBTimeoutError,
+    asset_download_url,
     clear_stored_api_key,
     default_key_path,
     resolve_api_key,
@@ -332,6 +334,39 @@ def test_download_rejects_html(tmp_path):
         download_url("https://cdn.example/nope", dest, session=session)
     assert not dest.exists()
     assert not (tmp_path / "art.png.part").exists()
+
+
+def test_ico_assets_download_the_png_thumb(tmp_path):
+    asset = GridAsset(
+        id=8319,
+        kind="icon",
+        url="https://cdn.example/icon.ico",
+        thumb="https://cdn.example/256x256.png",
+        mime="image/vnd.microsoft.icon",
+    )
+    assert asset_download_url(asset) == asset.thumb
+    session = ScriptedSession(
+        [FakeResponse(200, json_body=None, content=PNG_1X1, url=asset.thumb)]
+    )
+    client = SteamGridDBClient(
+        "test-secret-key", session=session, sleeper=lambda _delay: None
+    )
+    dest = tmp_path / "icon"
+    client.download_asset(asset, dest)
+    assert dest.read_bytes() == PNG_1X1
+    assert "256x256.png" in session.calls[-1][1]
+    assert not session.calls[-1][1].endswith(".ico")
+
+
+def test_png_icons_still_download_the_full_url():
+    asset = GridAsset(
+        id=1,
+        kind="icon",
+        url="https://cdn.example/icon.png",
+        thumb="https://cdn.example/thumb.png",
+        mime="image/png",
+    )
+    assert asset_download_url(asset) == asset.url
 
 
 def test_download_accepts_webp_with_png_name(tmp_path):

@@ -48,6 +48,126 @@ def test_window_constructs_without_scanning(qapp):
     assert window._steam_poll.isActive() is False
     assert "Steam" in window.import_button.toolTip()
     assert window.imported_filter.isEnabled() is True
+    assert window.collection_list.count() == 0
+    assert window.detail_tabs.tabText(0) == "Details"
+    assert window.detail_tabs.tabText(1) == "Collections"
+    assert window.detail_tabs.currentIndex() == 0
+    window.close()
+
+
+def test_collection_list_loads_assignable_collections(qapp, tmp_path):
+    from PySide6.QtCore import Qt
+
+    from .test_collections import seed_cloud_storage
+
+    window = _window()
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    seed_cloud_storage(account)
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    names = [
+        window.collection_list.item(i).text()
+        for i in range(window.collection_list.count())
+        if window.collection_list.item(i).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    ]
+    assert names == ["Emulation", "Favorites", "Linux Apps", "Tools"]
+    assert "Hidden" not in [
+        window.collection_list.item(i).text()
+        for i in range(window.collection_list.count())
+    ]
+    assert all(
+        window.collection_list.item(i).checkState() != Qt.CheckState.Checked
+        for i in range(window.collection_list.count())
+        if window.collection_list.item(i).flags() & Qt.ItemFlag.ItemIsUserCheckable
+    )
+    window.close()
+
+
+def test_collection_filter_hides_non_matching_names(qapp, tmp_path):
+    from .test_collections import seed_cloud_storage
+
+    window = _window()
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    seed_cloud_storage(account)
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    window.collection_filter.setText("linux")
+    visible = [
+        window.collection_list.item(i).text()
+        for i in range(window.collection_list.count())
+        if not window.collection_list.item(i).isHidden()
+    ]
+    assert visible == ["Linux Apps"]
+    window.collection_filter.clear()
+    assert all(
+        not window.collection_list.item(i).isHidden()
+        for i in range(window.collection_list.count())
+    )
+    window.close()
+
+
+def test_collection_new_name_is_in_the_assignment(qapp, tmp_path):
+    from PySide6.QtCore import Qt
+
+    from .test_collections import seed_cloud_storage
+
+    window = _window()
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    seed_cloud_storage(account)
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    linux = next(
+        window.collection_list.item(i)
+        for i in range(window.collection_list.count())
+        if window.collection_list.item(i).text() == "Linux Apps"
+    )
+    linux.setCheckState(Qt.CheckState.Checked)
+    window.collection_new.setText("My Shelf")
+    assignment = window._collection_assignment()
+    assert assignment.existing_ids == ("uc-BBBB",)
+    assert assignment.create_names == ("My Shelf",)
     window.close()
 
 

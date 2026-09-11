@@ -64,9 +64,10 @@ The importer must never perform the `flatpak override` itself
 
 1. Live `shortcuts.vdf` writes go only through the Phase 7 transaction
    (`steam/commit.py`) and require Steam to be closed. `config/grid/` writes
-   go only through `steam/artwork.py`. Debug commands stay read-only against
-   Steam. Do not point tests at this host's real userdata; unit tests use
-   tmp copies.
+   go only through `steam/artwork.py`. Collection JSON writes go only
+   through `steam/collection_commit.py` and also require Steam to be closed.
+   Debug commands stay read-only against Steam. Do not point tests at this
+   host's real userdata; unit tests use tmp copies.
 2. Phase 0 capture tooling (`scripts/characterize_shortcuts.py`) is
    read-only by construction.
 3. Before any future live write test: fully exit Steam, and independently
@@ -77,7 +78,8 @@ The importer must never perform the `flatpak override` itself
 ## Current status of live writes
 
 Unit tests never point at this host's real userdata. Live `shortcuts.vdf`
-writes go through `steam/commit.py` and artwork through `steam/artwork.py`.
+writes go through `steam/commit.py`, artwork through `steam/artwork.py`, and
+collection JSON through `steam/collection_commit.py`.
 Phase 10 imported native Konsole on this account, confirmed it in the
 Steam UI, and re-imported after Steam was killed while stuck. The VDF
 still parsed; AppID `3511661831` was kept. See

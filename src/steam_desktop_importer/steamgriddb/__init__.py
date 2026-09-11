@@ -14,7 +14,7 @@ from .auth import (
     save_api_key,
     xdg_config_home,
 )
-from .client import DEFAULT_BASE_URL, SteamGridDBClient, is_http_url
+from .client import DEFAULT_BASE_URL, SteamGridDBClient, asset_download_url, is_http_url
 from .download import DEFAULT_MAX_BYTES, download_url
 from .errors import (
     AuthenticationError,
@@ -44,6 +44,7 @@ __all__ = [
     "SteamGridDBClient",
     "SteamGridDBError",
     "SteamGridDBTimeoutError",
+    "asset_download_url",
     "clear_stored_api_key",
     "default_key_path",
     "download_url",

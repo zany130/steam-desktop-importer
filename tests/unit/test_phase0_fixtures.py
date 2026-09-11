@@ -280,6 +280,7 @@ def _write_calls(tree: ast.AST) -> list[str]:
 # shortcuts.vdf through steam/commit.py only. Phase 8 may write a 0600 API-key
 # file under XDG_CONFIG_HOME and download artwork into caller-supplied temp
 # paths. Phase 9 may place validated images under a userdata config/grid.
+# Phase 12 may replace cloud-storage collection JSON through collection_commit.
 _WRITE_ALLOWED = {
     "state/store.py": {"mkdir"},
     "steam/commit.py": {
@@ -297,6 +298,13 @@ _WRITE_ALLOWED = {
         "os.replace",
         "os.unlink",
     },
+    "steam/collection_commit.py": {
+        "mkdir",
+        "os.replace",
+        "os.fsync",
+        "os.write",
+        "os.unlink",
+    },
     "steamgriddb/auth.py": {"mkdir", "write_text", "os.chmod", "os.unlink"},
     "steamgriddb/download.py": {
         "mkdir",
@@ -309,11 +317,13 @@ _WRITE_ALLOWED = {
 
 @pytest.mark.parametrize("module", sorted(SRC.rglob("*.py")), ids=lambda p: p.name)
 def test_package_performs_no_filesystem_writes(module):
-    """Steam writes exist only in ``steam/commit.py`` and ``steam/artwork.py``.
+    """Steam writes exist only in ``steam/commit.py``, ``steam/artwork.py``,
+    and ``steam/collection_commit.py``.
 
     The state store may create its own directory. SteamGridDB may write a
     config-file API key and temp artwork downloads. Grid placement is
-    allowlisted in ``steam/artwork.py`` only.
+    allowlisted in ``steam/artwork.py`` only. Collection JSON replacement is
+    allowlisted in ``steam/collection_commit.py`` only.
     """
     tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
     found = _write_calls(tree)
