@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QListWidgetItem
 
 from steam_desktop_importer.models import (
     DesktopApplication,
@@ -168,6 +168,60 @@ def test_collection_new_name_is_in_the_assignment(qapp, tmp_path):
     assignment = window._collection_assignment()
     assert assignment.existing_ids == ("uc-BBBB",)
     assert assignment.create_names == ("My Shelf",)
+    window.close()
+
+
+def test_collection_checks_do_not_carry_between_accounts(qapp, tmp_path):
+    from PySide6.QtCore import Qt
+
+    from .test_collections import seed_cloud_storage
+
+    window = _window()
+    root = tmp_path / "Steam"
+    first_installation = SteamInstallation(
+        kind="native",
+        root=root / "native",
+        userdata_root=root / "native" / "userdata",
+        display_name="Native Steam",
+    )
+    second_installation = SteamInstallation(
+        kind="flatpak",
+        root=root / "flatpak",
+        userdata_root=root / "flatpak" / "userdata",
+        display_name="Flatpak Steam",
+    )
+    first_account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="first",
+        persona_name="First",
+        userdata_dir=first_installation.userdata_root / "11111111",
+        selection_hints=[],
+    )
+    second_account = SteamAccount(
+        steam_id64="76561197982487950",
+        account_id32=22222222,
+        account_name="second",
+        persona_name="Second",
+        userdata_dir=second_installation.userdata_root / "22222222",
+        selection_hints=[],
+    )
+    seed_cloud_storage(first_account)
+    seed_cloud_storage(second_account)
+    window._selected_installation = first_installation
+    window._selected_account = first_account
+    window._reload_collections()
+    linux = next(
+        window.collection_list.item(i)
+        for i in range(window.collection_list.count())
+        if window.collection_list.item(i).text() == "Linux Apps"
+    )
+    linux.setCheckState(Qt.CheckState.Checked)
+    assert window._checked_collection_ids() == ["uc-BBBB"]
+    window._selected_installation = second_installation
+    window._selected_account = second_account
+    window._reload_collections()
+    assert window._checked_collection_ids() == []
     window.close()
 
 
@@ -556,6 +610,64 @@ def test_import_selected_commits_vdf_and_state(qapp, tmp_path, monkeypatch):
     mapping = store.get_mapping(installation.key, account.account_id32, app.desktop_id)
     assert mapping is not None
     assert window._model.rows()[0].import_status == STATUS_IMPORTED
+    window.close()
+
+
+def test_relink_confirmation_mentions_collection_assignment(qapp, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import Qt
+
+    window = _window()
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    installation = SteamInstallation(
+        kind="native",
+        root=tmp_path / "Steam",
+        userdata_root=tmp_path / "Steam" / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=installation.userdata_root / "11111111",
+        selection_hints=[],
+    )
+    window._selected_installation = installation
+    window._selected_account = account
+    collection = QListWidgetItem("Linux Apps")
+    collection.setData(Qt.ItemDataRole.UserRole, "uc-BBBB")
+    collection.setFlags(
+        Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable
+    )
+    collection.setCheckState(Qt.CheckState.Checked)
+    window.collection_list.addItem(collection)
+    window.collection_new.setText("My Shelf")
+    monkeypatch.setattr(window, "_sync_running_status", lambda: None)
+    monkeypatch.setattr(window, "_write_ready_reason", lambda: None)
+    monkeypatch.setattr(window, "_selected_relink_rows", lambda: [SimpleNamespace(app=app)])
+    monkeypatch.setattr(
+        window,
+        "_existing_shortcuts",
+        lambda: [
+            SimpleNamespace(
+                appid_unsigned=0x8000ABCD,
+                name="Example",
+                exe='"/usr/bin/example"',
+                launch_options="",
+            )
+        ],
+    )
+    captured: dict[str, str] = {}
+
+    def capture(_title: str, text: str) -> bool:
+        captured["text"] = text
+        return False
+
+    monkeypatch.setattr(window, "_confirm_write", capture)
+    window._relink_selected()
+    assert "Also add to collection(s): Linux Apps, new \"My Shelf\"" in captured["text"]
     window.close()
 
 

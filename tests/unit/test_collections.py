@@ -217,3 +217,35 @@ def test_refuses_hidden_and_from_tag_even_if_requested(tmp_path):
     assert any("missing" in error for error in errors)
     hidden = next(item for item in document.live_collections() if item.collection_id == "hidden")
     assert hidden.added == (999,)
+
+
+def test_scalar_added_or_removed_is_skipped_without_crashing(tmp_path):
+    account = _account(tmp_path / "Steam")
+    cloud = seed_cloud_storage(account)
+    path = cloud / "cloud-storage-namespace-1.json"
+    entries = json.loads(path.read_text(encoding="utf-8"))
+    entries.append(
+        _live(
+            "user-collections.uc-BAD1",
+            json.dumps(
+                {"id": "uc-BAD1", "name": "Bad1", "added": 7, "removed": []},
+                separators=(",", ":"),
+            ),
+            version="12",
+        )
+    )
+    entries.append(
+        _live(
+            "user-collections.uc-BAD2",
+            json.dumps(
+                {"id": "uc-BAD2", "name": "Bad2", "added": [], "removed": 8},
+                separators=(",", ":"),
+            ),
+            version="12",
+        )
+    )
+    path.write_text(json.dumps(entries, separators=(",", ":")), encoding="utf-8")
+    document = load_collections(account)
+    ids = {collection.collection_id for collection in document.live_collections()}
+    assert "uc-BAD1" not in ids
+    assert "uc-BAD2" not in ids

@@ -248,6 +248,16 @@ class ArtworkDialog(QDialog):
         worker.signals.failed.connect(on_err)
         self._pool.start(worker)
 
+    def _clear_assets(self) -> None:
+        self._assets = {slot: [] for slot in SLOTS}
+        for listing in self._lists.values():
+            listing.blockSignals(True)
+            listing.clear()
+            listing.blockSignals(False)
+        self.preview.setPixmap(QPixmap())
+        self.preview.setText("No preview")
+        self._preview_bytes = None
+
     def _with_client(self, fn):
         client = self._client_factory()
         enter = getattr(client, "__enter__", None)
@@ -271,6 +281,8 @@ class ArtworkDialog(QDialog):
         if not query:
             self.status.setText("Enter a search term.")
             return
+        self.game_list.clear()
+        self._clear_assets()
         self._set_busy(True, "Searching SteamGridDB…")
 
         def work() -> list[GameResult]:
@@ -303,16 +315,18 @@ class ArtworkDialog(QDialog):
         game = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(game, GameResult):
             return
+        self._clear_assets()
         self._set_busy(True, f"Loading artwork for {game.name}…")
 
         def work() -> dict[str, list[GridAsset]]:
             return self._with_client(lambda client: _group_assets(client, game.id))
 
-        self._submit(work, self._on_assets_done, self._on_worker_failed)
+        self._submit(work, self._on_assets_done, self._on_assets_failed)
 
     def _on_assets_done(self, grouped: object) -> None:
         self._set_busy(False)
         assert isinstance(grouped, dict)
+        self._clear_assets()
         self._assets = grouped
         for slot, listing in self._lists.items():
             listing.blockSignals(True)
@@ -328,6 +342,11 @@ class ArtworkDialog(QDialog):
             "Choose artwork, or Use first matches if you do not care which "
             "result is picked."
         )
+
+    def _on_assets_failed(self, message: str) -> None:
+        self._set_busy(False)
+        self._clear_assets()
+        self.status.setText(message)
 
     def _selected_asset(self) -> GridAsset | None:
         listing = self._lists[SLOTS[self.tabs.currentIndex()]]
@@ -446,6 +465,8 @@ class ArtworkDialog(QDialog):
                     raise RuntimeError(
                         errors[0] if errors else "Nothing could be downloaded."
                     )
+                if errors:
+                    raise RuntimeError("; ".join(errors))
                 return files
 
             return self._with_client(download)

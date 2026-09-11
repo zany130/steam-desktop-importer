@@ -233,3 +233,46 @@ def test_cancel_after_results_still_skips(qapp, tmp_path):
     assert dialog.choice().action == ACTION_SKIP
     assert dialog.choice().files == {}
     dialog.close()
+
+
+def test_asset_load_failure_clears_previous_assets(qapp, tmp_path):
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    dialog = ArtworkDialog(
+        app,
+        tmp_path,
+        inline_workers=True,
+        client_factory=lambda: FakeClient(b""),
+    )
+    dialog._on_search()
+    assert dialog._first_assets()
+    dialog._on_assets_failed("boom")
+    assert dialog._first_assets() == {}
+    assert dialog.status.text() == "boom"
+    dialog.close()
+
+
+def test_partial_download_failure_keeps_dialog_open(qapp, tmp_path):
+    png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+        "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+    )
+
+    class PartialFailClient(FakeClient):
+        def download_asset(self, asset, temp_path):
+            if asset.id == 22:
+                raise RuntimeError("icon failed")
+            return super().download_asset(asset, temp_path)
+
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    dialog = ArtworkDialog(
+        app,
+        tmp_path,
+        inline_workers=True,
+        client_factory=lambda: PartialFailClient(png),
+    )
+    dialog._on_search()
+    dialog.use_first_button.click()
+    assert dialog.choice().action == ACTION_SKIP
+    assert dialog.choice().files == {}
+    assert "Icon: icon failed" in dialog.status.text()
+    dialog.close()

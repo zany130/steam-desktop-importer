@@ -141,6 +141,7 @@ class MainWindow(QMainWindow):
         self._installations: list[tuple[SteamInstallation, list[SteamAccount]]] = []
         self._selected_installation: SteamInstallation | None = None
         self._selected_account: SteamAccount | None = None
+        self._collections_identity: tuple[str, int] | None = None
         self._running: SteamRunningStatus | None = None
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
@@ -965,7 +966,7 @@ class MainWindow(QMainWindow):
             "Relink existing shortcut",
             f"Take ownership of AppID {match.appid_unsigned} "
             f"({match.name}) for {app.desktop_id}?\n\n"
-            "A new shortcut will not be created.",
+            f"A new shortcut will not be created.{self._collection_confirm_suffix()}",
         ):
             return
         try:
@@ -1169,9 +1170,23 @@ class MainWindow(QMainWindow):
         return "\n\nAlso add to collection(s): " + ", ".join(names)
 
     def _reload_collections(self) -> None:
-        previously = set(self._checked_collection_ids())
+        current_identity = (
+            (
+                self._selected_installation.key,
+                self._selected_account.account_id32,
+            )
+            if self._selected_installation is not None and self._selected_account is not None
+            else None
+        )
+        previously = (
+            set(self._checked_collection_ids())
+            if current_identity == self._collections_identity
+            else set()
+        )
+        self._collections_identity = current_identity
         self.collection_list.clear()
         if self._selected_account is None:
+            self._collections_identity = None
             self.collection_list.setEnabled(False)
             self.collection_filter.setEnabled(False)
             self.collection_new.setEnabled(False)

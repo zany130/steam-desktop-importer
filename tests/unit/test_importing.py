@@ -374,3 +374,29 @@ def test_import_adds_appid_to_selected_collection(tmp_path):
     hidden = next(item for item in document.live_collections() if item.collection_id == "hidden")
     assert hidden.added == (999,)
 
+
+def test_collection_commit_os_error_is_reported_not_raised(tmp_path, monkeypatch):
+    from steam_desktop_importer.steam import importing as importing_module
+    from steam_desktop_importer.steam.collections import CollectionAssignment
+
+    from .test_collections import seed_cloud_storage
+
+    root = tmp_path / "Steam"
+    account = _account(root)
+    seed_cloud_storage(account)
+    app = make_app(tmp_path / "org.example.App.desktop")
+    def fail_commit(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(importing_module, "commit_collections", fail_commit)
+    result = apply_applications(
+        [app],
+        installation=_installation(root),
+        account=account,
+        store=StateStore(":memory:"),
+        steam_status=CLOSED,
+        hooks=_hooks(),
+        collections=CollectionAssignment(existing_ids=("uc-BBBB",)),
+    )
+    assert result.collection_errors
+    assert "disk full" in result.collection_errors[0]

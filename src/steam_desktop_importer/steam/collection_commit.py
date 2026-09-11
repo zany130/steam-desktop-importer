@@ -226,7 +226,6 @@ def commit_collections(
         _require_steam_closed(active_hooks.detect_steam())
         if active_hooks.before_replace is not None:
             active_hooks.before_replace(namespace_temp, namespace_path)
-
         active_hooks.replace(str(namespace_temp), str(namespace_path))
         try:
             active_hooks.replace(str(index_temp), str(index_path))

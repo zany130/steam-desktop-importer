@@ -218,30 +218,26 @@ def _commit_collection_membership(
     """Add imported AppIDs to collections. Failures do not roll back the VDF."""
     if assignment is None or assignment.is_empty():
         return ()
+    errors: list[str] = []
     try:
         document = CollectionDocument.load(account)
-    except CollectionError as error:
-        return (str(error),)
-    namespace_path = document.namespace_path
-    index_path = document.index_path
-    if namespace_path is None or index_path is None:
-        return ("collections document has no destination paths",)
-    original_namespace = namespace_path.read_bytes() if namespace_path.is_file() else b""
-    original_index = index_path.read_bytes() if index_path.is_file() else b""
-    before_entries = deepcopy(document.entries)
-    before_index = deepcopy(document.index)
-    errors = list(document.apply_assignment(assignment, appids))
-    if document.entries == before_entries and document.index == before_index:
-        return tuple(errors)
-    try:
+        namespace_path = document.namespace_path
+        index_path = document.index_path
+        if namespace_path is None or index_path is None:
+            return ("collections document has no destination paths",)
+        before_entries = deepcopy(document.entries)
+        before_index = deepcopy(document.index)
+        errors.extend(document.apply_assignment(assignment, appids))
+        if document.entries == before_entries and document.index == before_index:
+            return tuple(errors)
         commit_collections(
             document,
-            original_namespace_bytes=original_namespace,
-            original_index_bytes=original_index,
+            original_namespace_bytes=document.original_namespace_bytes,
+            original_index_bytes=document.original_index_bytes,
             steam_status=steam_status,
             hooks=hooks,
         )
-    except CommitError as error:
+    except (CollectionError, CommitError, OSError) as error:
         errors.append(str(error))
     return tuple(errors)
 

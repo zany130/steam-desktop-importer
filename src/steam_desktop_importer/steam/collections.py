@@ -142,6 +142,14 @@ def _decode_value(raw: object) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _as_int_list(raw: object) -> tuple[int, ...] | None:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        return None
+    return tuple(number for number in (_as_int(value) for value in raw) if number is not None)
+
+
 def _encode_value(payload: dict[str, Any]) -> str:
     ordered: dict[str, Any] = {}
     for key in ("id", "name", "added", "removed"):
@@ -163,12 +171,16 @@ def _dumps(obj: object) -> bytes:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def _load_json(path: Path) -> object:
+def _load_json(path: Path) -> tuple[bytes, object]:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        payload = path.read_bytes()
     except FileNotFoundError:
         raise
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+    except OSError as error:
+        raise CollectionError(f"{path}: {error}") from error
+    try:
+        return payload, json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CollectionError(f"{path}: {error}") from error
 
 
@@ -247,6 +259,8 @@ class CollectionDocument:
     index: list[Any]
     namespace_path: Path | None = None
     index_path: Path | None = None
+    original_namespace_bytes: bytes = b""
+    original_index_bytes: bytes = b""
 
     @classmethod
     def empty(cls, namespace_id: int = DEFAULT_NAMESPACE_ID) -> CollectionDocument:
@@ -267,19 +281,20 @@ class CollectionDocument:
             document.namespace_path = ns_path
             document.index_path = idx_path
             if idx_path.is_file():
-                loaded = _load_json(idx_path)
+                document.original_index_bytes, loaded = _load_json(idx_path)
                 if not isinstance(loaded, list):
                     raise CollectionError(f"{idx_path}: expected a JSON array")
                 document.index = loaded
             return document
-        entries = _load_json(ns_path)
+        namespace_bytes, entries = _load_json(ns_path)
         if not isinstance(entries, list):
             raise CollectionError(f"{ns_path}: expected a JSON array")
         if idx_path.is_file():
-            index = _load_json(idx_path)
+            index_bytes, index = _load_json(idx_path)
             if not isinstance(index, list):
                 raise CollectionError(f"{idx_path}: expected a JSON array")
         else:
+            index_bytes = b""
             index = [[namespace_id, "0"]]
         return cls(
             namespace_id=namespace_id,
@@ -287,6 +302,8 @@ class CollectionDocument:
             index=index,
             namespace_path=ns_path,
             index_path=idx_path,
+            original_namespace_bytes=namespace_bytes,
+            original_index_bytes=index_bytes,
         )
 
     def dumps(self) -> bytes:
@@ -408,16 +425,10 @@ class CollectionDocument:
         payload = _decode_value(record.get("value"))
         if payload is None:
             return None
-        added = tuple(
-            number
-            for number in (_as_int(value) for value in payload.get("added") or [])
-            if number is not None
-        )
-        removed = tuple(
-            number
-            for number in (_as_int(value) for value in payload.get("removed") or [])
-            if number is not None
-        )
+        added = _as_int_list(payload.get("added"))
+        removed = _as_int_list(payload.get("removed"))
+        if added is None or removed is None:
+            return None
         name = payload.get("name")
         return SteamCollection(
             collection_id=collection_id,
@@ -450,16 +461,12 @@ class CollectionDocument:
         payload = _decode_value(record.get("value"))
         if payload is None:
             return False
-        added = [
-            number
-            for number in (_as_int(value) for value in payload.get("added") or [])
-            if number is not None
-        ]
-        removed = [
-            number
-            for number in (_as_int(value) for value in payload.get("removed") or [])
-            if number is not None
-        ]
+        added_values = _as_int_list(payload.get("added"))
+        removed_values = _as_int_list(payload.get("removed"))
+        if added_values is None or removed_values is None:
+            return False
+        added = list(added_values)
+        removed = list(removed_values)
         for appid in appids:
             if appid not in added:
                 added.append(appid)
