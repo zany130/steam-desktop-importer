@@ -93,7 +93,8 @@ Collections the user did not select are not tombstoned.
 Same durability rules as `shortcuts.vdf`: Steam closed, same-directory temp,
 fsync, parse-back, timestamped backup, `os.replace`. The only writer is
 `steam/collection_commit.py`. Import still succeeds if the collection write
-fails; the shortcut is already committed.
+fails; the shortcut is already committed. There is no path that edits
+collections while Steam is running.
 
 Default import still does **not** invent a collection. The UI starts with
 nothing checked and the name field empty. Membership is chosen on a

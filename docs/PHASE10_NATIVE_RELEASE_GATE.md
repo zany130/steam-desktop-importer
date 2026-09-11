@@ -160,8 +160,8 @@ byte-identical, Konsole added, five Konsole grid files added, nothing
 removed.
 
 Phase 10 native procedure is complete on this host. TEST-005 (replace a
-portrait while Steam is running) remains informational and does not block
-native MVP.
+portrait while Steam is running) is dropped: this importer never writes
+while Steam is running.
 
 ## Restore
 

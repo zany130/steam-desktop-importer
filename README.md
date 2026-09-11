@@ -13,11 +13,12 @@ shortcuts to Steam library collections. Phase 11 (Flatpak Steam) is not
 started.
 
 The GUI can import selected applications into `shortcuts.vdf` when Steam is
-closed. With `SGDB_API_KEY` (or a saved key), it can search SteamGridDB,
-preview artwork, and write selected images into the account's `config/grid/`
-directory after the VDF commit. Without a key, import is shortcut-only.
-Checked collections (or a typed new name) are written afterwards into
-Steam's cloud-storage JSON; they are never invented by default.
+closed. It never writes Steam userdata while Steam is running. With
+`SGDB_API_KEY` (or a saved key), it can search SteamGridDB, preview artwork,
+and write selected images into the account's `config/grid/` directory after
+the VDF commit. Without a key, import is shortcut-only. Checked collections
+(or a typed new name) are written afterwards into Steam's cloud-storage JSON;
+they are never invented by default.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -33,7 +34,8 @@ Steam's cloud-storage JSON; they are never invented by default.
 | 9 | Artwork UI and `grid/` placement | done |
 | 10 | Native Steam release gate | done |
 | 11 | Flatpak Steam experimental adapter | not started |
-| 12 | Steam collections | implemented (fixture-tested; live UI gate pending) |
+| 12 | Steam collections | implemented (Steam-closed writes; no live-Steam edits) |
+| — | Release packaging (AppImage for v1.0.0; Flatpak later) | not started |
 
 See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
 open issues.
@@ -41,7 +43,7 @@ open issues.
 ## What works today
 
 ```bash
-# Open the GUI. Import writes shortcuts.vdf only while Steam is closed.
+# Open the GUI. Import writes Steam files only while Steam is closed.
 steam-desktop-importer
 
 # Show the ordered applications/ roots that will be scanned.
@@ -185,4 +187,6 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
 - Steam collections are written to cloud-storage JSON while Steam is closed,
   never by stuffing names into `shortcuts.vdf` `tags`. Nothing is added
   unless you check a collection or type a new name.
+- `shortcuts.vdf`, `config/grid/`, and collection JSON are never written
+  while Steam is running. Artwork hot reload is out of scope.
 - Flatpak Steam sandbox permissions are never modified.
