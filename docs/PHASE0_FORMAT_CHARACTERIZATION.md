@@ -261,7 +261,7 @@ These remain open and must not be treated as settled:
 - Whether `ShortcutPath` has any effect (TEST-004).
 - Whether `FlatpakAppID` has any effect (TEST-003).
 - Multi-account selection hints (TEST-002) — only one account available.
-- Artwork hot reload while Steam runs (TEST-005).
+- Artwork hot reload while Steam runs (TEST-005) — **dropped**; out of scope.
 - Any Flatpak Steam behavior (§11, TEST-001) — not installed.
 - Whether binary KeyValues key lookup is genuinely case-insensitive in Steam.
 - What `LastPlayTime` should be for a brand-new shortcut. §15 lists the field

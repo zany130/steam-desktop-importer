@@ -55,6 +55,8 @@ The importer needs broad host filesystem access, Steam configuration access, app
 - full FreeDesktop D-Bus activation
 - automatic weakening of Flatpak Steam sandbox permissions
 - direct `shortcuts.vdf` modification while Steam is running
+- artwork, icon, or collection writes while Steam is running
+- artwork hot reload while Steam is running (TEST-005)
 - silently choosing between multiple plausible Steam accounts
 - treating undocumented Steam fields as public/stable Valve APIs
 
@@ -1093,8 +1095,8 @@ Rules for this importer:
 - Collection-write failures must not roll back a successful shortcut commit.
 - New collections use an `sdi-` id prefix.
 
-Until a live Steam UI gate is recorded, treat collection writes as
-**experimental observed behavior**.
+Treat collection writes as **experimental observed behavior**, not a public
+Valve API. Mutations still require Steam closed.
 
 ---
 
@@ -1222,19 +1224,23 @@ A small operation journal may be added if needed.
 
 ---
 
-# 28. Artwork While Steam Is Running
+# 28. Steam Must Be Closed
 
-Pure grid-art replacement does not necessarily share the same in-memory overwrite hazard as `shortcuts.vdf`.
+This importer never mutates Steam userdata while Steam is running.
 
-Current evidence suggests artwork may be written while Steam is open, although hot reload is not guaranteed.
+That includes:
 
-MVP policy:
+- `shortcuts.vdf`;
+- `config/grid/` artwork and icons;
+- collection cloud-storage JSON.
 
-- VDF modifications: Steam must be closed;
-- artwork-only refresh may later be allowed while Steam is running;
-- combined import flow requires Steam closed for simplicity.
+Steam must be fully exited before Import or Relink. The running probe may
+be overridden only when it is a **false positive** and the user has already
+confirmed Steam is gone. That override is not a license to write while
+Steam is actually open.
 
-This is a deliberate safety policy, not a claim that live artwork writes are impossible.
+Artwork replacement while Steam is running (TEST-005 / hot reload) is out
+of scope. It is theoretically possible; this app will not do it.
 
 ---
 
@@ -1524,8 +1530,8 @@ commit. Native Steam, Steam closed. Cloud-storage JSON only; not `tags`.
 2. Offer existing assignable collections; never invent one by default.
 3. Add the new unsigned 32-bit AppID to `added`.
 4. Atomic replace with backup; do not write `localconfig.vdf`.
-5. Live Steam UI confirmation is a release gate for this phase, separate
-   from the native shortcut gate in Phase 10.
+5. Do not treat opening Steam to inspect the result as a write. All
+   mutations happen with Steam closed; there is no live-Steam edit path.
 
 ---
 
@@ -1624,15 +1630,8 @@ ShortcutPath=""
 
 ## TEST-005 — Artwork hot reload
 
-While Steam is running:
-
-1. replace an existing portrait grid file;
-2. observe immediate UI;
-3. navigate away/back;
-4. restart Steam;
-5. verify persistence.
-
-This is informational and does not block native MVP release.
+**Dropped.** Replacing grid files while Steam is running is out of scope.
+This importer only writes with Steam fully exited.
 
 ---
 
@@ -1719,7 +1718,7 @@ Flatpak Steam may remain experimental.
 12. Do use unsigned 32-bit AppID for grid artwork.
 13. Do not use the derived 64-bit game ID as the normal artwork prefix.
 14. Do explicitly set a persistent shortcut icon path.
-15. Do not modify `shortcuts.vdf` while Steam is running.
+15. Do not modify `shortcuts.vdf`, `config/grid/`, or collection JSON while Steam is running.
 16. Do not directly truncate/overwrite the live VDF.
 17. Do validate a temporary VDF before replacement.
 18. Do fsync the parent directory when maximum Linux crash durability is required.
@@ -1774,7 +1773,7 @@ Strong enough for MVP but not a public Valve contract:
 - deterministic collision suffixing;
 - NoDisplay hidden by default but revealable;
 - collections written through cloud storage (Phase 12), never via `tags`;
-- combined import requires Steam closed;
+- all Steam userdata writes require Steam closed; no live/hot-reload edits;
 - Flatpak Steam remains experimental;
 - uncertain VDF fields remain empty.
 
@@ -1783,8 +1782,7 @@ Strong enough for MVP but not a public Valve contract:
 - current Linux account-selection hints;
 - Flatpak Steam host-launch UX and permissions;
 - `FlatpakAppID`;
-- `ShortcutPath`;
-- artwork hot reload while Steam runs.
+- `ShortcutPath`.
 
 ---
 
