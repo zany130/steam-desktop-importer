@@ -16,7 +16,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..launch import LaunchAdapterError, build_launch_vector
+from ..launch import LaunchAdapterError, build_launch_vector, wrap_for_flatpak_steam
 from ..models import DesktopApplication, SteamAccount, SteamInstallation
 from ..state.status import (
     STATUS_POSSIBLE_MATCH,
@@ -68,8 +68,16 @@ class ImportResult:
     collection_errors: tuple[str, ...] = ()
 
 
-def _fields_for(app: DesktopApplication) -> tuple[str, str, str, str]:
+def _fields_for(
+    app: DesktopApplication,
+    *,
+    installation: SteamInstallation,
+    host_launch: bool,
+    spawn_path: str | None = None,
+) -> tuple[str, str, str, str]:
     vector = build_launch_vector(app)
+    if installation.kind == "flatpak" and host_launch:
+        vector = wrap_for_flatpak_steam(vector, spawn_path=spawn_path)
     return (
         current_name(app),
         vector.exe,
@@ -92,6 +100,20 @@ def _require_present(app: DesktopApplication) -> None:
         raise ImportPlanningError(f"{app.desktop_id}: {error}") from error
 
 
+def _foreign_mapping_owner(
+    store: StateStore,
+    installation_key: str,
+    account_id32: int,
+    appid: int,
+    desktop_id: str,
+) -> str | None:
+    """Another desktop ID already persisted to ``appid``, or ``None``."""
+    for mapping in store.list_mappings(installation_key, account_id32):
+        if mapping.steam_appid_unsigned == appid and mapping.desktop_id != desktop_id:
+            return mapping.desktop_id
+    return None
+
+
 def _apply_one(
     app: DesktopApplication,
     document: ShortcutDocument,
@@ -101,9 +123,18 @@ def _apply_one(
     occupied: set[int],
     relink_appids: Mapping[str, int],
     icon_paths: Mapping[str, str],
+    *,
+    installation: SteamInstallation,
+    host_launch: bool,
+    spawn_path: str | None,
 ) -> ImportedShortcut:
     mapping = store.get_mapping(installation_key, account_id32, app.desktop_id)
-    name, exe, start_dir, launch_options = _fields_for(app)
+    name, exe, start_dir, launch_options = _fields_for(
+        app,
+        installation=installation,
+        host_launch=host_launch,
+        spawn_path=spawn_path,
+    )
     existing = [
         ExistingShortcut(
             appid_unsigned=entry.appid_unsigned,
@@ -147,7 +178,15 @@ def _apply_one(
             )
             action = "updated"
         else:
-            if appid in occupied:
+            owner = _foreign_mapping_owner(
+                store, installation_key, account_id32, appid, app.desktop_id
+            )
+            if owner is not None:
+                raise ImportPlanningError(
+                    f"{app.desktop_id}: persisted AppID {appid} is occupied by "
+                    f"{owner}; refusing to duplicate it"
+                )
+            if appid in document.occupied_appids():
                 raise ImportPlanningError(
                     f"{app.desktop_id}: persisted AppID {appid} is occupied by "
                     "another shortcut; refusing to duplicate it"
@@ -255,6 +294,8 @@ def apply_applications(
     icon_paths: Mapping[str, str] | None = None,
     artwork_files: Mapping[str, Mapping[str, Path]] | None = None,
     collections: CollectionAssignment | None = None,
+    host_launch: bool | None = None,
+    flatpak_spawn: str | None = None,
 ) -> ImportResult:
     """Mutate, commit, then persist mappings, place artwork, and optionally collect.
 
@@ -263,6 +304,10 @@ def apply_applications(
     rolling back Steam's shortcut file. Artwork is committed last among
     shortcut-adjacent writes (IMPLEMENTATION.md §18.4); collections are a
     separate cloud-storage document after that.
+
+    Flatpak Steam imports wrap the host command with ``flatpak-spawn --host``
+    when host launching is enabled. That wrap is experimental and never
+    grants sandbox permissions.
     """
     if not applications:
         raise ImportPlanningError("no applications selected")
@@ -273,6 +318,9 @@ def apply_applications(
         seen.add(app.desktop_id)
         _require_present(app)
 
+    wrap_host = (
+        store.flatpak_steam_host_launch() if host_launch is None else host_launch
+    )
     vdf_path = shortcuts_vdf_path(account)
     document = ShortcutDocument.load(vdf_path)
     if original_bytes is None:
@@ -296,6 +344,9 @@ def apply_applications(
                 occupied,
                 links,
                 icons,
+                installation=installation,
+                host_launch=wrap_host,
+                spawn_path=flatpak_spawn,
             )
         )
     _assign_artwork_icons(document, account, planned, icons, prepared_art)
@@ -344,6 +395,8 @@ def relink_application(
     icon_paths: Mapping[str, str] | None = None,
     artwork_files: Mapping[str, Mapping[str, Path]] | None = None,
     collections: CollectionAssignment | None = None,
+    host_launch: bool | None = None,
+    flatpak_spawn: str | None = None,
 ) -> ImportResult:
     """Take ownership of an existing unmanaged shortcut. Never allocates."""
     vdf_path = shortcuts_vdf_path(account)
@@ -383,6 +436,8 @@ def relink_application(
         icon_paths=icon_paths,
         artwork_files=artwork_files,
         collections=collections,
+        host_launch=host_launch,
+        flatpak_spawn=flatpak_spawn,
     )
 
 

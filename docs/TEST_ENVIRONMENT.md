@@ -41,8 +41,8 @@ machine that will be used for the Phase 10 native Steam release gate.
 
 - **One Steam account only.** MUST-TEST TEST-002 (account-selection hints)
   and the multi-account confirmation dialog of §13 cannot be validated here.
-- **No Flatpak Steam.** §11, Phase 11, and MUST-TEST TEST-001 cannot be
-  validated here.
+- **No Flatpak Steam.** Live TEST-001 cannot run here. Phase 11 host-launch
+  wrapping is fixture-tested and must stay labelled experimental.
 
 A second environment is required before either of those can move out of
 "experimental / untested".

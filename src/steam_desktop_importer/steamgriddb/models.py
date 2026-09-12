@@ -55,3 +55,4 @@ class GridAsset:
     epilepsy: bool = False
     lock: bool = False
     author_name: str = ""
+    animated: bool = False

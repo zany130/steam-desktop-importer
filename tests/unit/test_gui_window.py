@@ -84,11 +84,19 @@ def test_collection_list_loads_assignable_collections(qapp, tmp_path):
         for i in range(window.collection_list.count())
         if window.collection_list.item(i).flags() & Qt.ItemFlag.ItemIsUserCheckable
     ]
-    assert names == ["Emulation", "Favorites", "Linux Apps", "Tools"]
-    assert "Hidden" not in [
+    assert names == [
+        "Action (tag collection)",
+        "Emulation",
+        "Favorites",
+        "Linux Apps",
+        "Tools",
+    ]
+    labels = [
         window.collection_list.item(i).text()
         for i in range(window.collection_list.count())
     ]
+    assert "Hidden" not in labels
+    assert "Verified and Playable on Deck" not in labels
     assert all(
         window.collection_list.item(i).checkState() != Qt.CheckState.Checked
         for i in range(window.collection_list.count())
@@ -171,6 +179,43 @@ def test_collection_new_name_is_in_the_assignment(qapp, tmp_path):
     window.close()
 
 
+def test_typed_hidden_or_dynamic_name_is_blocked_before_import(qapp, tmp_path):
+    from .test_collections import seed_cloud_storage
+
+    window = _window()
+    root = tmp_path / "Steam"
+    installation = SteamInstallation(
+        kind="native",
+        root=root,
+        userdata_root=root / "userdata",
+        display_name="Native Steam",
+    )
+    account = SteamAccount(
+        steam_id64="76561197971376839",
+        account_id32=11111111,
+        account_name="single_user",
+        persona_name="Single",
+        userdata_dir=root / "userdata" / "11111111",
+        selection_hints=[],
+    )
+    seed_cloud_storage(account)
+    window._installations = [(installation, [account])]
+    window._fill_installations()
+    window.collection_new.setText("action")
+    assert window._blocked_create_collection_reason() is None
+    window.collection_new.setText("Linux Apps")
+    assert window._blocked_create_collection_reason() is None
+    window.collection_new.setText("Hidden")
+    reason = window._blocked_create_collection_reason()
+    assert reason is not None
+    assert "Hidden" in reason
+    window.collection_new.setText("Verified and Playable on Deck")
+    reason = window._blocked_create_collection_reason()
+    assert reason is not None
+    assert "Verified and Playable on Deck" in reason
+    window.close()
+
+
 def test_collection_checks_do_not_carry_between_accounts(qapp, tmp_path):
     from PySide6.QtCore import Qt
 
@@ -233,6 +278,35 @@ def test_settings_dialog_has_a_steamgriddb_key_field(qapp):
     assert "SteamGridDB" in body
     assert dialog.key_edit.echoMode() == QLineEdit.EchoMode.Password
     assert dialog.poll_enabled.isChecked() is True
+    assert dialog.host_launch.isChecked() is True
+    assert dialog.artwork_filters.static.isChecked() is True
+    assert dialog.artwork_filters.nsfw.isChecked() is False
+    assert dialog.artwork_filters.animated.isChecked() is False
+    from PySide6.QtWidgets import QGroupBox
+
+    titles = {box.title() for box in dialog.findChildren(QGroupBox)}
+    assert titles == {"SteamGridDB", "Artwork filters", "Steam", "Flatpak Steam"}
+    dialog.close()
+
+
+def test_settings_persists_flatpak_steam_host_launch(qapp):
+    store = StateStore(":memory:")
+    dialog = SettingsDialog(store=store)
+    dialog.host_launch.setChecked(False)
+    assert store.flatpak_steam_host_launch() is False
+    dialog.close()
+
+
+def test_settings_persists_steamgriddb_artwork_filters(qapp):
+    store = StateStore(":memory:")
+    dialog = SettingsDialog(store=store)
+    dialog.artwork_filters.nsfw.setChecked(True)
+    dialog.artwork_filters.animated.setChecked(True)
+    dialog.artwork_filters.humor.setChecked(True)
+    loaded = store.artwork_filters()
+    assert loaded.allow_nsfw is True
+    assert loaded.allow_humor is True
+    assert loaded.include_animated is True
     dialog.close()
 
 
@@ -843,4 +917,129 @@ def test_overriding_steam_detection_allows_import_when_probe_says_running(
     window._import_selected()
     vdf = shortcuts_vdf_path(account)
     assert ShortcutDocument.load(vdf).find_by_appid(first_import_candidate(app.desktop_id))
+    window.close()
+
+
+def test_flatpak_install_selection_starts_async_permission_probe(qapp):
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    calls: list[str] = []
+    installation = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam"),
+        userdata_root=Path("/tmp/steam/userdata"),
+        display_name="Flatpak Steam",
+    )
+    window._installations = [(installation, [])]
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window.install_combo.addItem(installation.display_name, installation.key)
+    window.install_combo.setCurrentIndex(0)
+    assert calls == ["probe"]
+    assert "Checking Flatpak host-launch permission" in window.banner.text()
+    window.close()
+
+
+def test_switching_installations_clears_cached_flatpak_permission(qapp):
+    from steam_desktop_importer.launch import HostLaunchPermission
+
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    first = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    second = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-b"),
+        userdata_root=Path("/tmp/steam-b/userdata"),
+        display_name="Flatpak Steam B",
+    )
+    window._installations = [(second, [])]
+    window._selected_installation = first
+    window._host_launch_permission = HostLaunchPermission(True, "cached")
+    window._probe_host_launch_permission = lambda: None
+    window.install_combo.addItem(second.display_name, second.key)
+    window.install_combo.setCurrentIndex(0)
+    window._on_install_chosen()
+    assert window._host_launch_permission is None
+    window.close()
+
+
+def test_outdated_flatpak_probe_result_is_ignored(qapp):
+    from steam_desktop_importer.launch import HostLaunchPermission
+
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    first = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    second = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-b"),
+        userdata_root=Path("/tmp/steam-b/userdata"),
+        display_name="Flatpak Steam B",
+    )
+    calls: list[str] = []
+    window._selected_installation = second
+    window._host_launch_probe_key = first.key
+    window._host_launch_probe_busy = True
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window._on_host_launch_permission(HostLaunchPermission(True, "stale"))
+    assert window._host_launch_permission is None
+    assert calls == ["probe"]
+    window.close()
+
+
+def test_outdated_flatpak_probe_failure_is_ignored(qapp):
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    first = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    second = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-b"),
+        userdata_root=Path("/tmp/steam-b/userdata"),
+        display_name="Flatpak Steam B",
+    )
+    calls: list[str] = []
+    window._selected_installation = second
+    window._host_launch_probe_key = first.key
+    window._host_launch_probe_busy = True
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window._on_host_launch_permission_failed("boom")
+    assert window._host_launch_permission is None
+    assert calls == ["probe"]
+    window.close()
+
+
+def test_stale_flatpak_probe_generation_is_ignored(qapp):
+    from steam_desktop_importer.launch import HostLaunchPermission
+
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    installation = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    calls: list[str] = []
+    window._selected_installation = installation
+    window._host_launch_probe_key = installation.key
+    window._host_launch_probe_busy = True
+    window._host_launch_probe_started_generation = 0
+    window._host_launch_probe_generation = 1
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window._on_host_launch_permission(HostLaunchPermission(True, "stale"))
+    assert window._host_launch_permission is None
+    assert calls == ["probe"]
     window.close()

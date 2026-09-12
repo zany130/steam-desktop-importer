@@ -1048,12 +1048,17 @@ Suggested logical API:
 
 ```python
 search_games(query)
-get_grids(game_id, dimensions=None)
-get_heroes(game_id)
-get_logos(game_id)
-get_icons(game_id)
+get_grids(game_id, dimensions=None, filters=None)
+get_heroes(game_id, filters=None)
+get_logos(game_id, filters=None)
+get_icons(game_id, filters=None)
 download_asset(asset, temp_path)
 ```
+
+Listing requests send SteamGridDB's documented query params. Defaults match
+the API and Steam ROM Manager: `types=static`, `nsfw=false`, `humor=false`,
+`epilepsy=false`. The artwork dialog and Settings can opt into animated,
+NSFW, joke, and epilepsy artwork, and optionally limit grids to one style.
 
 ---
 
@@ -1088,8 +1093,10 @@ Rules for this importer:
 - Replace the namespace JSON (and the namespaces index) only through
   `steam/collection_commit.py`, with backup, parse-back, and `os.replace`.
 - Do not write `localconfig.vdf`.
-- Do not add imports to Steam's `hidden` collection or `from-tag-*`
-  collections.
+- Do not add imports to Steam's `hidden` collection or Dynamic
+  Collections (`filterSpec`).
+- `from-tag-*` store-tag collections are assignable; the UI labels them
+  `(tag collection)`.
 - Do not create a collection unless the user typed a name or checked an
   existing one.
 - Collection-write failures must not roll back a successful shortcut commit.
@@ -1506,20 +1513,15 @@ Native Steam is the MVP release target.
 
 ## Phase 11 — Flatpak Steam experimental adapter
 
-Behind an experimental feature flag, test:
+Implemented against fixtures. Shortcuts imported into Flatpak Steam are
+wrapped with `flatpak-spawn --host`. A Settings flag (default on) can disable
+the wrap. Permission to `org.freedesktop.Flatpak` is probed read-only; the
+manual override command is shown and **never executed**.
 
-- stock permissions;
-- explicit `org.freedesktop.Flatpak` permission;
-- native host app;
-- host Flatpak;
-- Snap;
-- AppImage;
-- working directory;
-- env wrapper;
-- artwork;
-- icon.
-
-Do not advertise full Flatpak Steam support until this matrix passes.
+Live TEST-001 (stock vs granted Flathub Steam, host apps / Flatpaks / Snaps /
+AppImages, working directory, env wrapper, artwork, icon) still needs
+Environment B. Until that matrix passes, do not advertise full Flatpak Steam
+support.
 
 ## Phase 12 — Steam collections
 

@@ -109,6 +109,29 @@ def test_steam_poll_preferences_default_and_round_trip():
         store.set_steam_poll(enabled=True, interval_ms=50)
         assert store.steam_poll_enabled() is True
         assert store.steam_poll_ms() == MIN_STEAM_POLL_MS
+        assert store.flatpak_steam_host_launch() is True
+        store.set_flatpak_steam_host_launch(False)
+        assert store.flatpak_steam_host_launch() is False
+        store.set_steam_poll(enabled=True, interval_ms=2000)
+        assert store.flatpak_steam_host_launch() is False
+        store.set_flatpak_steam_host_launch(True)
+        assert store.flatpak_steam_host_launch() is True
+        filters = store.artwork_filters()
+        assert filters.allow_nsfw is False
+        assert filters.include_static is True
+        assert filters.include_animated is False
+        from steam_desktop_importer.steamgriddb import ArtworkFilters
+
+        store.set_artwork_filters(
+            ArtworkFilters.from_allows(nsfw=True, humor=True, animated=True, styles=("alternate",))
+        )
+        store.set_steam_poll(enabled=True, interval_ms=2000)
+        loaded = store.artwork_filters()
+        assert loaded.allow_nsfw is True
+        assert loaded.allow_humor is True
+        assert loaded.include_animated is True
+        assert loaded.include_static is True
+        assert loaded.grid_style == "alternate"
 
 
 def test_collision_acknowledgements_are_bound_to_the_physical_winner(tmp_path):

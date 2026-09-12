@@ -43,6 +43,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..desktop.discovery import DiscoveryResult
+from ..launch import (
+    HostLaunchPermission,
+    MANUAL_OVERRIDE_COMMAND,
+    probe_host_launch_permission,
+)
 from ..models import SOURCE_KINDS, DesktopApplication, SteamAccount, SteamInstallation, UnsupportedCode
 from ..state import (
     DEFAULT_STEAM_POLL_MS,
@@ -75,6 +80,7 @@ from ..steam import (
     shortcuts_vdf_path,
     steam_allows_write,
 )
+from ..steam.collections import collection_list_label, is_tag_collection_id
 from ..steam.running import SteamRunningStatus
 from ..steamgriddb.auth import resolve_api_key
 from .account_dialog import AccountDialog
@@ -142,7 +148,15 @@ class MainWindow(QMainWindow):
         self._selected_installation: SteamInstallation | None = None
         self._selected_account: SteamAccount | None = None
         self._collections_identity: tuple[str, int] | None = None
+        self._assignable_collection_names: set[str] = set()
+        self._unassignable_collection_names: dict[str, str] = {}
         self._running: SteamRunningStatus | None = None
+        self._host_launch_permission: HostLaunchPermission | None = None
+        self._host_launch_probe_busy = False
+        self._host_launch_probe_key: str | None = None
+        self._host_launch_probe_generation = 0
+        self._host_launch_probe_started_generation = -1
+        self._host_launch_probe_worker: CallableWorker | None = None
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
         self._scan_busy = False
@@ -324,13 +338,18 @@ class MainWindow(QMainWindow):
         self.collection_new.setPlaceholderText("New collection name (optional)")
         self.collection_new.setToolTip(
             "Creates a collection if no assignable collection already has this "
-            "name. Left blank, no collection is created."
+            "name (including tag collections). Names used by Hidden or Dynamic "
+            "Collections cannot be reused. Left blank, no collection is created."
         )
 
         collections_page = QWidget()
         collections_layout = QVBoxLayout(collections_page)
         collections_layout.setContentsMargins(0, 8, 0, 0)
-        hint = QLabel("Optional. Checked collections receive the imported shortcuts.")
+        hint = QLabel(
+            "Optional. Checked collections receive the imported shortcuts. "
+            "Store-tag shelves are labelled (tag collection). Hidden and "
+            "Dynamic Collections are omitted."
+        )
         hint.setWordWrap(True)
         collections_layout.addWidget(hint)
         collections_layout.addWidget(self.collection_filter)
@@ -550,11 +569,15 @@ class MainWindow(QMainWindow):
                 return
 
     def _on_install_chosen(self) -> None:
+        previous_key = self._selected_installation.key if self._selected_installation else None
         key = self.install_combo.currentData()
         pair = next((item for item in self._installations if item[0].key == key), None)
         self._selected_installation = pair[0] if pair else None
+        if self._selected_installation is None or self._selected_installation.key != previous_key:
+            self._reset_host_launch_permission()
         if self._selected_installation is not None:
             self._store.remember_installation(self._selected_installation.key)
+        self._probe_host_launch_permission()
         self._fill_accounts(pair[1] if pair else None)
         self._update_banner()
         self._refresh_import_statuses()
@@ -662,10 +685,28 @@ class MainWindow(QMainWindow):
     def _update_banner(self) -> None:
         messages: list[str] = []
         if self._selected_installation and self._selected_installation.is_experimental:
-            messages.append(
-                "Flatpak Steam is experimental. Host launching is not implemented "
-                "in the MVP, and sandbox permissions will never be changed automatically."
-            )
+            enabled = self._store.flatpak_steam_host_launch()
+            if enabled:
+                messages.append(
+                    "Flatpak Steam is experimental. Shortcuts use "
+                    "flatpak-spawn --host. Live launch is not validated on "
+                    "this release; sandbox permissions are never changed "
+                    "automatically."
+                )
+                permission = self._host_launch_permission
+                if permission is None:
+                    messages.append("Checking Flatpak host-launch permission…")
+                elif not permission.granted:
+                    messages.append(
+                        f"{permission.evidence} If you choose to grant it "
+                        f"yourself: {MANUAL_OVERRIDE_COMMAND}"
+                    )
+            else:
+                messages.append(
+                    "Flatpak Steam is experimental. Host launching is disabled "
+                    "in Settings, so raw host paths will be written. Sandbox "
+                    "permissions are never changed automatically."
+                )
         if self.install_combo.currentData() is None and self.install_combo.isEnabled():
             messages.append(
                 "Several Steam installations were found. Choose one; the first "
@@ -693,6 +734,73 @@ class MainWindow(QMainWindow):
             )
         self.banner.setVisible(bool(messages))
         self.banner.setText(" ".join(messages))
+
+    def _probe_host_launch_permission(self) -> None:
+        installation = self._selected_installation
+        if (
+            self._host_launch_probe_busy
+            or installation is None
+            or not installation.is_experimental
+            or not self._store.flatpak_steam_host_launch()
+        ):
+            return
+        self._host_launch_probe_busy = True
+        self._host_launch_probe_key = installation.key
+        self._host_launch_probe_started_generation = self._host_launch_probe_generation
+        worker = CallableWorker(probe_host_launch_permission)
+        self._host_launch_probe_worker = worker
+        worker.signals.finished.connect(self._on_host_launch_permission)
+        worker.signals.failed.connect(self._on_host_launch_permission_failed)
+        self._pool.start(worker)
+
+    def _on_host_launch_permission(self, result: object) -> None:
+        probe_key = self._host_launch_probe_key
+        probe_generation = self._host_launch_probe_started_generation
+        self._host_launch_probe_busy = False
+        self._host_launch_probe_key = None
+        self._host_launch_probe_started_generation = -1
+        self._host_launch_probe_worker = None
+        current_key = self._selected_installation.key if self._selected_installation else None
+        if (
+            probe_key != current_key
+            or probe_generation != self._host_launch_probe_generation
+        ):
+            self._probe_host_launch_permission()
+            self._update_banner()
+            return
+        if isinstance(result, HostLaunchPermission):
+            self._host_launch_permission = result
+        self._update_banner()
+
+    def _on_host_launch_permission_failed(self, _message: str) -> None:
+        probe_key = self._host_launch_probe_key
+        probe_generation = self._host_launch_probe_started_generation
+        self._host_launch_probe_busy = False
+        self._host_launch_probe_key = None
+        self._host_launch_probe_started_generation = -1
+        self._host_launch_probe_worker = None
+        current_key = self._selected_installation.key if self._selected_installation else None
+        if (
+            probe_key != current_key
+            or probe_generation != self._host_launch_probe_generation
+        ):
+            self._probe_host_launch_permission()
+            self._update_banner()
+            return
+        if self._host_launch_permission is None:
+            self._host_launch_permission = HostLaunchPermission(
+                granted=False,
+                evidence=(
+                    "could not read Flatpak Steam permissions; host launching is "
+                    "experimental and may fail until org.freedesktop.Flatpak is "
+                    "granted manually"
+                ),
+            )
+        self._update_banner()
+
+    def _reset_host_launch_permission(self) -> None:
+        self._host_launch_permission = None
+        self._host_launch_probe_generation += 1
 
     # -- table actions --------------------------------------------------
 
@@ -894,6 +1002,10 @@ class MainWindow(QMainWindow):
             if skipped
             else ""
         )
+        blocked_name = self._blocked_create_collection_reason()
+        if blocked_name is not None:
+            QMessageBox.warning(self, "Cannot create collection", blocked_name)
+            return
         account = self._selected_account
         installation = self._selected_installation
         assert account is not None and installation is not None
@@ -959,6 +1071,10 @@ class MainWindow(QMainWindow):
             )
             return
         match = matches[0]
+        blocked_name = self._blocked_create_collection_reason()
+        if blocked_name is not None:
+            QMessageBox.warning(self, "Cannot create collection", blocked_name)
+            return
         account = self._selected_account
         installation = self._selected_installation
         assert account is not None and installation is not None
@@ -1004,7 +1120,7 @@ class MainWindow(QMainWindow):
             return {}
         files: dict[str, dict[str, Path]] = {}
         for app in apps:
-            dialog = ArtworkDialog(app, dest_dir, parent=self)
+            dialog = ArtworkDialog(app, dest_dir, parent=self, store=self._store)
             dialog.exec()
             choice = dialog.choice()
             if choice.action == ACTION_SKIP_REMAINING:
@@ -1148,6 +1264,23 @@ class MainWindow(QMainWindow):
                     checked.append(collection_id)
         return checked
 
+    def _blocked_create_collection_reason(self) -> str | None:
+        typed = self.collection_new.text().strip()
+        if not typed:
+            return None
+        fold = typed.casefold()
+        if fold in self._assignable_collection_names:
+            return None
+        blocked = self._unassignable_collection_names.get(fold)
+        if blocked is None:
+            return None
+        return (
+            f'Steam already has a collection named "{blocked}" that this '
+            "importer cannot add shortcuts to (Hidden or a Dynamic Collection). "
+            "Creating another with that name would show as a duplicate. Pick a "
+            "different name."
+        )
+
     def _collection_assignment(self) -> CollectionAssignment:
         name = self.collection_new.text().strip()
         return CollectionAssignment(
@@ -1185,6 +1318,8 @@ class MainWindow(QMainWindow):
         )
         self._collections_identity = current_identity
         self.collection_list.clear()
+        self._assignable_collection_names = set()
+        self._unassignable_collection_names = {}
         if self._selected_account is None:
             self._collections_identity = None
             self.collection_list.setEnabled(False)
@@ -1202,6 +1337,12 @@ class MainWindow(QMainWindow):
             self.collection_list.addItem(placeholder)
             self._filter_collections()
             return
+        for live in document.live_collections():
+            fold = live.name.casefold()
+            if live.assignable:
+                self._assignable_collection_names.add(fold)
+            else:
+                self._unassignable_collection_names[fold] = live.name
         collections = sorted(
             document.assignable_collections(),
             key=lambda item: item.name.casefold(),
@@ -1213,7 +1354,7 @@ class MainWindow(QMainWindow):
             self._filter_collections()
             return
         for collection in collections:
-            item = QListWidgetItem(collection.name)
+            item = QListWidgetItem(collection_list_label(collection))
             item.setData(Qt.ItemDataRole.UserRole, collection.collection_id)
             item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled
@@ -1226,9 +1367,15 @@ class MainWindow(QMainWindow):
                 else Qt.CheckState.Unchecked
             )
             item.setCheckState(checked)
-            item.setToolTip(
-                f"{collection.collection_id} — {len(collection.added)} games"
-            )
+            if is_tag_collection_id(collection.collection_id):
+                item.setToolTip(
+                    f"{collection.collection_id} — Steam store-tag collection, "
+                    f"{len(collection.added)} games"
+                )
+            else:
+                item.setToolTip(
+                    f"{collection.collection_id} — {len(collection.added)} games"
+                )
             self.collection_list.addItem(item)
         self._filter_collections()
 
@@ -1282,7 +1429,10 @@ class MainWindow(QMainWindow):
             store=self._store,
             on_poll_changed=lambda: self._apply_steam_poll_settings(probe_now=True),
         ).exec()
+        self._reset_host_launch_permission()
         self._apply_steam_poll_settings()
+        self._probe_host_launch_permission()
+        self._update_banner()
 
     def closeEvent(self, event) -> None:
         self._steam_poll.stop()

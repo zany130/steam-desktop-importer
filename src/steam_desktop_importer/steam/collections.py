@@ -41,7 +41,10 @@ __all__ = [
     "CollectionError",
     "SteamCollection",
     "cloud_storage_dir",
+    "collection_list_label",
     "is_assignable_collection_id",
+    "is_hidden_collection_id",
+    "is_tag_collection_id",
     "load_collections",
     "namespace_index_path",
     "namespace_path",
@@ -53,7 +56,7 @@ IMPORTER_COLLECTION_PREFIX = "sdi-"
 DEFAULT_NAMESPACE_ID = 1
 TIMESTAMP_VERSION_FLOOR = 1_000_000_000
 _NAMESPACE_FILE = re.compile(r"^cloud-storage-namespace-(\d+)\.json$")
-_SKIP_ID_PREFIXES = ("from-tag-",)
+_TAG_ID_PREFIX = "from-tag-"
 _SKIP_IDS = frozenset({"hidden"})
 
 
@@ -70,6 +73,7 @@ class SteamCollection:
     added: tuple[int, ...]
     removed: tuple[int, ...]
     assignable: bool
+    dynamic: bool = False
 
 
 @dataclass(frozen=True)
@@ -78,7 +82,10 @@ class CollectionAssignment:
 
     Empty means "do not open cloud storage". Existing ids are the suffix after
     ``user-collections.``. Create names become new ``sdi-`` collections unless
-    a live assignable collection already has that name (case-insensitive).
+    a live assignable collection already has that name (case-insensitive),
+    including ``from-tag-*`` store-tag shelves. A name that only exists on
+    ``hidden`` or a Dynamic Collection (``filterSpec``) is an error, not a
+    second collection with the same label.
     """
 
     existing_ids: tuple[str, ...] = ()
@@ -102,15 +109,44 @@ def namespace_path(account: SteamAccount, namespace_id: int) -> Path:
     return cloud_storage_dir(account) / f"cloud-storage-namespace-{namespace_id}.json"
 
 
-def is_assignable_collection_id(collection_id: str) -> bool:
-    """Collections the importer may add a shortcut to.
+def is_tag_collection_id(collection_id: str) -> bool:
+    return collection_id.startswith(_TAG_ID_PREFIX)
 
-    ``from-tag-*`` is Steam-generated from store tags. ``hidden`` is Steam's
-    hidden-games collection; putting a new import there would hide it.
+
+def is_hidden_collection_id(collection_id: str) -> bool:
+    return collection_id in _SKIP_IDS
+
+
+def is_assignable_collection_id(collection_id: str) -> bool:
+    """Id-only skip list. ``hidden`` hides games; Dynamic Collections are
+    ``uc-*`` ids plus a ``filterSpec`` and are skipped at parse time.
+    Store-tag ``from-tag-*`` shelves are assignable.
     """
-    if collection_id in _SKIP_IDS:
-        return False
-    return not any(collection_id.startswith(prefix) for prefix in _SKIP_ID_PREFIXES)
+    return collection_id not in _SKIP_IDS
+
+
+def _payload_is_dynamic(payload: dict[str, Any]) -> bool:
+    return payload.get("filterSpec") is not None
+
+
+def collection_list_label(collection: SteamCollection) -> str:
+    """Label for the Collections tab. Tag shelves are marked in the list."""
+    if is_tag_collection_id(collection.collection_id):
+        return f"{collection.name} (tag collection)"
+    return collection.name
+
+
+def _blocked_create_name_error(name: str, blocked: SteamCollection) -> str:
+    if blocked.dynamic:
+        kind = "dynamic collection"
+    elif is_hidden_collection_id(blocked.collection_id):
+        kind = "hidden-games collection"
+    else:
+        kind = "collection"
+    return (
+        f'{name}: Steam already has a {kind} named "{blocked.name}" '
+        f"({blocked.collection_id}); pick a different name"
+    )
 
 
 def new_collection_id(existing: Iterable[str] = ()) -> str:
@@ -378,9 +414,14 @@ class CollectionDocument:
         errors: list[str] = []
         existing_ids = set(self.collection_ids())
         changed = False
+        live_by_id = {item.collection_id: item for item in self.live_collections()}
 
         for collection_id in assignment.existing_ids:
-            if not is_assignable_collection_id(collection_id):
+            target = live_by_id.get(collection_id)
+            if target is None:
+                errors.append(f"{collection_id}: collection not found")
+                continue
+            if not target.assignable:
                 errors.append(f"{collection_id}: not an assignable collection")
                 continue
             if not self._add_to_existing(collection_id, unsigned, version, timestamp):
@@ -397,6 +438,10 @@ class CollectionDocument:
                 self._add_to_existing(match, unsigned, version, timestamp)
                 changed = True
                 continue
+            blocked = self._unassignable_by_name(name)
+            if blocked is not None:
+                errors.append(_blocked_create_name_error(name, blocked))
+                continue
             new_id = new_collection_id(existing_ids)
             existing_ids.add(new_id)
             self._create(new_id, name, unsigned, version, timestamp)
@@ -408,9 +453,23 @@ class CollectionDocument:
 
     def _assignable_by_name(self, name: str) -> str | None:
         needle = name.casefold()
-        for collection in self.assignable_collections():
-            if collection.name.casefold() == needle:
-                return collection.collection_id
+        matches = [
+            collection
+            for collection in self.assignable_collections()
+            if collection.name.casefold() == needle
+        ]
+        if not matches:
+            return None
+        matches.sort(
+            key=lambda item: (is_tag_collection_id(item.collection_id), item.collection_id)
+        )
+        return matches[0].collection_id
+
+    def _unassignable_by_name(self, name: str) -> SteamCollection | None:
+        needle = name.casefold()
+        for collection in self.live_collections():
+            if not collection.assignable and collection.name.casefold() == needle:
+                return collection
         return None
 
     def _collection_from_item(self, item: object) -> SteamCollection | None:
@@ -430,12 +489,14 @@ class CollectionDocument:
         if added is None or removed is None:
             return None
         name = payload.get("name")
+        dynamic = _payload_is_dynamic(payload)
         return SteamCollection(
             collection_id=collection_id,
             name=name if isinstance(name, str) else collection_id,
             added=added,
             removed=removed,
-            assignable=is_assignable_collection_id(collection_id),
+            assignable=is_assignable_collection_id(collection_id) and not dynamic,
+            dynamic=dynamic,
         )
 
     def _find_item(self, collection_id: str) -> list[Any] | None:

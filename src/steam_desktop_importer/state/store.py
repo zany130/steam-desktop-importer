@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ..desktop.discovery import CollisionAcknowledgement, normalize_collision_path
+from ..steamgriddb.filters import ArtworkFilters
 
 __all__ = [
     "DEFAULT_STEAM_POLL_MS",
@@ -81,6 +82,13 @@ CREATE TABLE IF NOT EXISTS preferences (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     steam_poll_enabled INTEGER NOT NULL DEFAULT 1,
     steam_poll_ms INTEGER NOT NULL DEFAULT 2000,
+    flatpak_steam_host_launch INTEGER NOT NULL DEFAULT 1,
+    sgdb_allow_nsfw INTEGER NOT NULL DEFAULT 0,
+    sgdb_allow_humor INTEGER NOT NULL DEFAULT 0,
+    sgdb_allow_epilepsy INTEGER NOT NULL DEFAULT 0,
+    sgdb_include_static INTEGER NOT NULL DEFAULT 1,
+    sgdb_include_animated INTEGER NOT NULL DEFAULT 0,
+    sgdb_grid_style TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL
 );
 """
@@ -88,6 +96,15 @@ CREATE TABLE IF NOT EXISTS preferences (
 _ACK_REQUIRED_COLUMNS = frozenset(
     {"desktop_id", "winner_path", "colliding_paths", "fingerprint", "acknowledged_at"}
 )
+_PREFERENCE_COLUMNS = {
+    "flatpak_steam_host_launch": "INTEGER NOT NULL DEFAULT 1",
+    "sgdb_allow_nsfw": "INTEGER NOT NULL DEFAULT 0",
+    "sgdb_allow_humor": "INTEGER NOT NULL DEFAULT 0",
+    "sgdb_allow_epilepsy": "INTEGER NOT NULL DEFAULT 0",
+    "sgdb_include_static": "INTEGER NOT NULL DEFAULT 1",
+    "sgdb_include_animated": "INTEGER NOT NULL DEFAULT 0",
+    "sgdb_grid_style": "TEXT NOT NULL DEFAULT ''",
+}
 
 
 def xdg_state_home(environ: dict[str, str] | None = None, home: Path | None = None) -> Path:
@@ -185,6 +202,7 @@ class StateStore:
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.executescript(_SCHEMA)
         self._discard_unbound_acknowledgements()
+        self._ensure_preference_columns()
         self._connection.commit()
 
     def _discard_unbound_acknowledgements(self) -> None:
@@ -201,6 +219,16 @@ class StateStore:
             return
         self._connection.execute("DROP TABLE acknowledged_collisions")
         self._connection.executescript(_SCHEMA)
+
+    def _ensure_preference_columns(self) -> None:
+        columns = {
+            row[1] for row in self._connection.execute("PRAGMA table_info(preferences)")
+        }
+        for name, declaration in _PREFERENCE_COLUMNS.items():
+            if name not in columns:
+                self._connection.execute(
+                    f"ALTER TABLE preferences ADD COLUMN {name} {declaration}"
+                )
 
     def close(self) -> None:
         self._connection.close()
@@ -433,6 +461,93 @@ class StateStore:
         if row is None:
             return DEFAULT_STEAM_POLL_MS
         return clamp_steam_poll_ms(int(row["steam_poll_ms"]))
+
+    def flatpak_steam_host_launch(self) -> bool:
+        """Experimental Flatpak Steam ``flatpak-spawn --host`` wrapping.
+
+        Default on. Disabling writes raw host paths, which typically fail
+        inside the Steam sandbox. This importer never grants the portal.
+        """
+        row = self._connection.execute(
+            "SELECT flatpak_steam_host_launch FROM preferences WHERE id = 1"
+        ).fetchone()
+        return True if row is None else bool(row["flatpak_steam_host_launch"])
+
+    def set_flatpak_steam_host_launch(self, enabled: bool) -> None:
+        poll_enabled = 1 if self.steam_poll_enabled() else 0
+        interval = self.steam_poll_ms()
+        self._connection.execute(
+            """
+            INSERT INTO preferences (
+                id, steam_poll_enabled, steam_poll_ms, flatpak_steam_host_launch, updated_at
+            )
+            VALUES (1, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                flatpak_steam_host_launch = excluded.flatpak_steam_host_launch,
+                updated_at = excluded.updated_at
+            """,
+            (poll_enabled, interval, 1 if enabled else 0, _now()),
+        )
+        self._connection.commit()
+
+    def artwork_filters(self) -> ArtworkFilters:
+        """SteamGridDB listing filters. Defaults match SteamGridDB (static, no NSFW/joke)."""
+        row = self._connection.execute(
+            """
+            SELECT sgdb_allow_nsfw, sgdb_allow_humor, sgdb_allow_epilepsy,
+                   sgdb_include_static, sgdb_include_animated, sgdb_grid_style
+            FROM preferences WHERE id = 1
+            """
+        ).fetchone()
+        if row is None:
+            return ArtworkFilters()
+        style = str(row["sgdb_grid_style"] or "")
+        return ArtworkFilters.from_allows(
+            nsfw=bool(row["sgdb_allow_nsfw"]),
+            humor=bool(row["sgdb_allow_humor"]),
+            epilepsy=bool(row["sgdb_allow_epilepsy"]),
+            static=bool(row["sgdb_include_static"]) or not bool(row["sgdb_include_animated"]),
+            animated=bool(row["sgdb_include_animated"]),
+            styles=(style,) if style else (),
+        )
+
+    def set_artwork_filters(self, filters: ArtworkFilters) -> None:
+        poll_enabled = 1 if self.steam_poll_enabled() else 0
+        interval = self.steam_poll_ms()
+        host_launch = 1 if self.flatpak_steam_host_launch() else 0
+        style = filters.grid_style
+        self._connection.execute(
+            """
+            INSERT INTO preferences (
+                id, steam_poll_enabled, steam_poll_ms, flatpak_steam_host_launch,
+                sgdb_allow_nsfw, sgdb_allow_humor, sgdb_allow_epilepsy,
+                sgdb_include_static, sgdb_include_animated, sgdb_grid_style,
+                updated_at
+            )
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (id) DO UPDATE SET
+                sgdb_allow_nsfw = excluded.sgdb_allow_nsfw,
+                sgdb_allow_humor = excluded.sgdb_allow_humor,
+                sgdb_allow_epilepsy = excluded.sgdb_allow_epilepsy,
+                sgdb_include_static = excluded.sgdb_include_static,
+                sgdb_include_animated = excluded.sgdb_include_animated,
+                sgdb_grid_style = excluded.sgdb_grid_style,
+                updated_at = excluded.updated_at
+            """,
+            (
+                poll_enabled,
+                interval,
+                host_launch,
+                1 if filters.allow_nsfw else 0,
+                1 if filters.allow_humor else 0,
+                1 if filters.allow_epilepsy else 0,
+                1 if filters.include_static else 0,
+                1 if filters.include_animated else 0,
+                style,
+                _now(),
+            ),
+        )
+        self._connection.commit()
 
     def set_steam_poll(self, *, enabled: bool, interval_ms: int) -> None:
         self._connection.execute(

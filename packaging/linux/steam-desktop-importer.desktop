@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Steam Desktop Importer
+Comment=Import FreeDesktop applications into Steam as non-Steam shortcuts
+Exec=AppRun
+Icon=steam-desktop-importer
+Terminal=false
+Categories=Utility;
+StartupNotify=true

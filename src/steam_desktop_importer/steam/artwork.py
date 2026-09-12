@@ -15,7 +15,6 @@ from ..models import SteamAccount
 from ..steamgriddb.images import COMPAT_EXTENSIONS, sniff_image, steam_filename_extension
 
 __all__ = [
-    "MAX_ASSETS_PER_SLOT",
     "PORTRAIT_DIMENSIONS",
     "SLOT_HERO",
     "SLOT_ICON",
@@ -39,7 +38,6 @@ SLOT_HERO = "hero"
 SLOT_LOGO = "logo"
 SLOT_ICON = "icon"
 SLOTS = (SLOT_PORTRAIT, SLOT_WIDE, SLOT_HERO, SLOT_LOGO, SLOT_ICON)
-MAX_ASSETS_PER_SLOT = 24
 # Common SteamGridDB sizes (IMPLEMENTATION.md §19.3). Not Steam-mandated.
 PORTRAIT_DIMENSIONS = frozenset({"600x900", "342x482"})
 WIDE_DIMENSIONS = frozenset({"460x215", "920x430"})

@@ -14,12 +14,28 @@ from .adapters import (
     build_launch_vector,
     is_transient_appimage_path,
 )
+from .flatpak_steam import (
+    FLATPAK_PORTAL_INTERFACE,
+    FLATPAK_SPAWN,
+    HostLaunchPermission,
+    MANUAL_OVERRIDE_COMMAND,
+    is_host_wrapped,
+    probe_host_launch_permission,
+    wrap_for_flatpak_steam,
+)
 
 __all__ = [
     "ADAPTERS",
     "FILE_FORWARDING_FLAG",
+    "FLATPAK_PORTAL_INTERFACE",
+    "FLATPAK_SPAWN",
+    "HostLaunchPermission",
     "LaunchAdapterError",
     "LaunchVector",
+    "MANUAL_OVERRIDE_COMMAND",
     "build_launch_vector",
+    "is_host_wrapped",
     "is_transient_appimage_path",
+    "probe_host_launch_permission",
+    "wrap_for_flatpak_steam",
 ]

@@ -8,17 +8,20 @@ Built to the specification in `IMPLEMENTATION.md`.
 
 ## Status
 
-**Phases 0–10 are implemented** on native Steam. Phase 12 can add imported
-shortcuts to Steam library collections. Phase 11 (Flatpak Steam) is not
-started.
+**Phases 0–12 are implemented** on native Steam. Phase 11 Flatpak Steam host
+launching is experimental and fixture-tested (TEST-001 live launch is not
+validated here). v1.0.0 ships as source/venv and an AppImage.
 
 The GUI can import selected applications into `shortcuts.vdf` when Steam is
 closed. It never writes Steam userdata while Steam is running. With
 `SGDB_API_KEY` (or a saved key), it can search SteamGridDB, preview artwork,
 and write selected images into the account's `config/grid/` directory after
-the VDF commit. Without a key, import is shortcut-only. Checked collections
-(or a typed new name) are written afterwards into Steam's cloud-storage JSON;
-they are never invented by default.
+the VDF commit. Without a key, import is shortcut-only. Artwork filters match
+Steam ROM Manager: static by default; NSFW, joke, epilepsy, and animated are
+opt-in. Checked collections (or a typed new name) are written afterwards into
+Steam's cloud-storage JSON; they are never invented by default. Flatpak Steam
+imports wrap host commands with `flatpak-spawn --host` and never grant sandbox
+permissions.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -33,9 +36,9 @@ they are never invented by default.
 | 8 | SteamGridDB client | done |
 | 9 | Artwork UI and `grid/` placement | done |
 | 10 | Native Steam release gate | done |
-| 11 | Flatpak Steam experimental adapter | not started |
+| 11 | Flatpak Steam experimental adapter | implemented (fixture-tested; live TEST-001 pending) |
 | 12 | Steam collections | implemented (Steam-closed writes; no live-Steam edits) |
-| — | Release packaging (AppImage for v1.0.0; Flatpak later) | not started |
+| — | Release packaging (AppImage for v1.0.0; Flatpak later) | AppImage recipe; Flatpak of this importer not in 1.0.0 |
 
 See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
 open issues.
@@ -60,6 +63,7 @@ steam-desktop-importer debug desktop-entry /usr/share/applications/org.kde.kate.
 
 # Show the command a shortcut would run. Never executes it, never writes.
 steam-desktop-importer debug launch us.zoom.Zoom.desktop
+steam-desktop-importer debug launch --flatpak-steam us.zoom.Zoom.desktop
 steam-desktop-importer debug launch          # summary across all entries
 
 # Show Steam installations and accounts. Read-only.
@@ -81,6 +85,7 @@ steam-desktop-importer debug collections
 # Search SteamGridDB. Needs SGDB_API_KEY or a saved key. Never writes Steam.
 steam-desktop-importer debug steamgriddb search Kate
 steam-desktop-importer debug steamgriddb grids 2254 --dimensions 600x900
+steam-desktop-importer debug steamgriddb grids 2254 --nsfw any --humor any --types static,animated
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,
@@ -133,6 +138,16 @@ uv pip install -e '.[dev]'
 ```
 
 Phases 0–1 only need `vdf`, `pyxdg` and `pytest`. The GUI needs `PySide6`.
+
+Build a host AppImage (does not write Steam):
+
+```bash
+./scripts/build_appimage.sh
+```
+
+The image lands in `dist/Steam_Desktop_Importer-<version>-<arch>.AppImage`.
+It is a normal host binary with host filesystem access. It still refuses to
+write Steam userdata while Steam is running.
 
 Regenerate the binary VDF fixtures (they are committed, so this is only needed
 if the generator changes):

@@ -15,7 +15,8 @@ never writes to it.
 With no subcommand the PySide6 GUI starts. Import writes ``shortcuts.vdf``
 only through the Phase 7 transaction, and only while Steam is closed.
 Optional collection membership is written afterwards through
-``steam/collection_commit.py``.
+``steam/collection_commit.py``. Flatpak Steam imports wrap host commands
+with ``flatpak-spawn --host`` and never grant sandbox permissions.
 """
 
 from __future__ import annotations
@@ -31,7 +32,12 @@ from .desktop.discovery import (
     ordered_application_roots,
 )
 from .desktop.parser import DesktopEntryError, build_application, parse_desktop_entry
-from .launch import LaunchAdapterError, build_launch_vector
+from .launch import (
+    LaunchAdapterError,
+    build_launch_vector,
+    probe_host_launch_permission,
+    wrap_for_flatpak_steam,
+)
 from .models import DesktopApplication
 from .state import (
     StateStore,
@@ -57,6 +63,7 @@ from .steam import (
     shortcuts_vdf_path,
     uint32_to_int32,
 )
+from .steam.collections import is_tag_collection_id
 from .steam.snapshot import compare_snapshots, snapshot_from_json, snapshot_library
 
 
@@ -236,6 +243,12 @@ def _print_steam(args: argparse.Namespace) -> int:
         print(f"      key           {installation.key}")
         if installation.is_experimental:
             print("      note          Flatpak Steam is experimental (§11)")
+            permission = probe_host_launch_permission()
+            print(f"      host launch   {'granted' if permission.granted else 'not granted'}")
+            print(f"      evidence      {permission.evidence}")
+            if not permission.granted:
+                print(f"      override      {permission.override_command}")
+                print("      override      never run by this importer")
 
     print(f"selection           {selection.reason}")
     print(f"needs confirmation  {selection.requires_confirmation}")
@@ -500,7 +513,14 @@ def _print_collections(args: argparse.Namespace) -> int:
     print(f"live collections    {len(live)}")
     print(f"assignable          {len(assignable)}")
     for collection in live:
-        flag = "assignable" if collection.assignable else "skipped"
+        if collection.dynamic:
+            flag = "dynamic"
+        elif not collection.assignable:
+            flag = "skipped"
+        elif is_tag_collection_id(collection.collection_id):
+            flag = "tag"
+        else:
+            flag = "assignable"
         print(
             f"  {collection.collection_id:40} {flag:10} "
             f"added={len(collection.added):<5} {collection.name}"
@@ -553,6 +573,8 @@ def _print_launch(args: argparse.Namespace) -> int:
     for app in selected:
         try:
             vector = build_launch_vector(app)
+            if args.flatpak_steam:
+                vector = wrap_for_flatpak_steam(vector)
         except LaunchAdapterError as error:
             refused.append((app.desktop_id, error.code))
             continue
@@ -625,6 +647,28 @@ def _print_sgdb_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sgdb_filters(args: argparse.Namespace):
+    from .steamgriddb import ArtworkFilters
+
+    def parts(values: list[str] | None) -> tuple[str, ...]:
+        if not values:
+            return ()
+        out: list[str] = []
+        for item in values:
+            out.extend(token.strip() for token in item.split(",") if token.strip())
+        return tuple(out)
+
+    types = parts(getattr(args, "types", None)) or ("static",)
+    return ArtworkFilters(
+        nsfw=getattr(args, "nsfw", "false"),
+        humor=getattr(args, "humor", "false"),
+        epilepsy=getattr(args, "epilepsy", "false"),
+        types=types,
+        styles=parts(getattr(args, "styles", None)),
+        mimes=parts(getattr(args, "mimes", None)),
+    )
+
+
 def _print_sgdb_assets(args: argparse.Namespace) -> int:
     from .steamgriddb import SteamGridDBError
 
@@ -632,13 +676,16 @@ def _print_sgdb_assets(args: argparse.Namespace) -> int:
     if client is None:
         return 2
     kind = args.sgdb_command
+    filters = _sgdb_filters(args)
     fetchers = {
         "grids": lambda: client.get_grids(
-            args.game_id, dimensions=getattr(args, "dimensions", None) or None
+            args.game_id,
+            dimensions=getattr(args, "dimensions", None) or None,
+            filters=filters,
         ),
-        "heroes": lambda: client.get_heroes(args.game_id),
-        "logos": lambda: client.get_logos(args.game_id),
-        "icons": lambda: client.get_icons(args.game_id),
+        "heroes": lambda: client.get_heroes(args.game_id, filters=filters),
+        "logos": lambda: client.get_logos(args.game_id, filters=filters),
+        "icons": lambda: client.get_icons(args.game_id, filters=filters),
     }
     try:
         assets = fetchers[kind]()
@@ -652,7 +699,17 @@ def _print_sgdb_assets(args: argparse.Namespace) -> int:
         return 0
     for asset in assets:
         size = f"{asset.width}x{asset.height}" if asset.width and asset.height else "-"
-        print(f"{asset.id:>8}  {asset.style or '-':<12} {size:<12} {asset.url}")
+        flags: list[str] = []
+        if asset.animated:
+            flags.append("animated")
+        if asset.nsfw:
+            flags.append("nsfw")
+        if asset.humor:
+            flags.append("joke")
+        if asset.epilepsy:
+            flags.append("epilepsy")
+        tag = ",".join(flags) if flags else "-"
+        print(f"{asset.id:>8}  {asset.style or '-':<12} {size:<12} {tag:<16} {asset.url}")
     return 0
 
 
@@ -700,6 +757,11 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument("desktop_id", nargs="?", help="limit to one desktop ID")
     launch.add_argument("--all", action="store_true", help="include NoDisplay entries")
     launch.add_argument("--verbose", action="store_true", help="print every vector")
+    launch.add_argument(
+        "--flatpak-steam",
+        action="store_true",
+        help="show the experimental flatpak-spawn --host wrap (Phase 11); never writes",
+    )
     launch.set_defaults(func=_print_launch)
 
     steam = debug_commands.add_parser(
@@ -771,6 +833,38 @@ def build_parser() -> argparse.ArgumentParser:
                 action="append",
                 help="repeatable, e.g. --dimensions 600x900",
             )
+            listing.add_argument(
+                "--styles",
+                action="append",
+                help="grid styles, e.g. --styles alternate (repeatable or comma-separated)",
+            )
+        listing.add_argument(
+            "--types",
+            action="append",
+            help="static and/or animated (default: static)",
+        )
+        listing.add_argument(
+            "--nsfw",
+            choices=("false", "true", "any"),
+            default="false",
+            help="false excludes NSFW, true is NSFW-only, any includes both",
+        )
+        listing.add_argument(
+            "--humor",
+            choices=("false", "true", "any"),
+            default="false",
+            help="joke artwork (SteamGridDB humor tag)",
+        )
+        listing.add_argument(
+            "--epilepsy",
+            choices=("false", "true", "any"),
+            default="false",
+        )
+        listing.add_argument(
+            "--mimes",
+            action="append",
+            help="image mime types, e.g. --mimes image/png",
+        )
         listing.set_defaults(func=_print_sgdb_assets)
 
     return parser

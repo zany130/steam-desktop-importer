@@ -49,6 +49,8 @@ def test_debug_collections_is_read_only(monkeypatch, tmp_path, capsys):
     assert "Linux Apps" in output
     assert "uc-BBBB" in output
     assert "skipped" in output
+    assert "tag" in output
+    assert "dynamic" in output
     assert (cloud / "cloud-storage-namespace-1.json").read_bytes() == original
     assert list(tmp_path.rglob("state.sqlite3")) == []
     assert not default_state_path().exists()

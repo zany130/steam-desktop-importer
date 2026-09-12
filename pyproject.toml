@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "steam-desktop-importer"
-version = "0.0.1"
+version = "1.0.0"
 description = "Import FreeDesktop .desktop applications into Steam as non-Steam shortcuts"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,6 +28,9 @@ steam-desktop-importer = "steam_desktop_importer.main:main"
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+]
+packaging = [
+    "pyinstaller>=6.0",
 ]
 
 [tool.hatch.build.targets.wheel]
