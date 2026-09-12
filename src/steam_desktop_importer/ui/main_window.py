@@ -576,6 +576,7 @@ class MainWindow(QMainWindow):
             self._reset_host_launch_permission()
         if self._selected_installation is not None:
             self._store.remember_installation(self._selected_installation.key)
+        self._probe_host_launch_permission()
         self._fill_accounts(pair[1] if pair else None)
         self._update_banner()
         self._refresh_import_statuses()
@@ -694,7 +695,6 @@ class MainWindow(QMainWindow):
                 permission = self._host_launch_permission
                 if permission is None:
                     messages.append("Checking Flatpak host-launch permission…")
-                    self._probe_host_launch_permission()
                 elif not permission.granted:
                     messages.append(
                         f"{permission.evidence} If you choose to grant it "
@@ -762,6 +762,7 @@ class MainWindow(QMainWindow):
             probe_key != current_key
             or probe_generation != self._host_launch_probe_generation
         ):
+            self._probe_host_launch_permission()
             self._update_banner()
             return
         if isinstance(result, HostLaunchPermission):
@@ -779,6 +780,7 @@ class MainWindow(QMainWindow):
             probe_key != current_key
             or probe_generation != self._host_launch_probe_generation
         ):
+            self._probe_host_launch_permission()
             self._update_banner()
             return
         if self._host_launch_permission is None:
@@ -1425,6 +1427,7 @@ class MainWindow(QMainWindow):
         ).exec()
         self._reset_host_launch_permission()
         self._apply_steam_poll_settings()
+        self._probe_host_launch_permission()
         self._update_banner()
 
     def closeEvent(self, event) -> None:
