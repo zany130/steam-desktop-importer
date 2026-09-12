@@ -1048,12 +1048,17 @@ Suggested logical API:
 
 ```python
 search_games(query)
-get_grids(game_id, dimensions=None)
-get_heroes(game_id)
-get_logos(game_id)
-get_icons(game_id)
+get_grids(game_id, dimensions=None, filters=None)
+get_heroes(game_id, filters=None)
+get_logos(game_id, filters=None)
+get_icons(game_id, filters=None)
 download_asset(asset, temp_path)
 ```
+
+Listing requests send SteamGridDB's documented query params. Defaults match
+the API and Steam ROM Manager: `types=static`, `nsfw=false`, `humor=false`,
+`epilepsy=false`. The artwork dialog and Settings can opt into animated,
+NSFW, joke, and epilepsy artwork, and optionally limit grids to one style.
 
 ---
 
@@ -1088,8 +1093,10 @@ Rules for this importer:
 - Replace the namespace JSON (and the namespaces index) only through
   `steam/collection_commit.py`, with backup, parse-back, and `os.replace`.
 - Do not write `localconfig.vdf`.
-- Do not add imports to Steam's `hidden` collection or `from-tag-*`
-  collections.
+- Do not add imports to Steam's `hidden` collection or Dynamic
+  Collections (`filterSpec`).
+- `from-tag-*` store-tag collections are assignable; the UI labels them
+  `(tag collection)`.
 - Do not create a collection unless the user typed a name or checked an
   existing one.
 - Collection-write failures must not roll back a successful shortcut commit.

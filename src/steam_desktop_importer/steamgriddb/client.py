@@ -26,6 +26,7 @@ from .errors import (
     SteamGridDBError,
     SteamGridDBTimeoutError,
 )
+from .filters import DEFAULT_ARTWORK_FILTERS, ArtworkFilters
 from .models import ArtworkKind, GameResult, GridAsset
 
 __all__ = [
@@ -33,9 +34,11 @@ __all__ = [
     "SteamGridDBClient",
     "asset_download_url",
     "is_http_url",
+    "preview_download_url",
 ]
 
 _ICON_MIMES = frozenset({"image/vnd.microsoft.icon", "image/x-icon"})
+_VIDEO_SUFFIXES = (".webm", ".mp4", ".mkv")
 
 DEFAULT_BASE_URL = "https://www.steamgriddb.com/api/v2"
 _CONNECT_TIMEOUT = 5.0
@@ -44,11 +47,27 @@ _MAX_RETRIES = 3
 _TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 # Fallback only when Retry-After is missing. Not an official SteamGridDB limit.
 _BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+# SteamGridDB lists 50 assets per page. Cap pages so a huge catalog cannot loop.
+_LIST_PAGE_LIMIT = 100
 
 
 def is_http_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _path_is_video(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return path.endswith(_VIDEO_SUFFIXES)
+
+
+def _asset_is_animated(raw: Mapping[str, Any], url: str, thumb: str) -> bool:
+    if _as_str(raw.get("type")).lower() == "animated":
+        return True
+    mime = _as_str(raw.get("mime")).lower()
+    if mime.startswith("video/"):
+        return True
+    return _path_is_video(url) or _path_is_video(thumb)
 
 
 def asset_download_url(asset: GridAsset) -> str:
@@ -64,6 +83,20 @@ def asset_download_url(asset: GridAsset) -> str:
     if (mime in _ICON_MIMES or path.endswith(".ico")) and asset.thumb:
         return asset.thumb
     return asset.url
+
+
+def preview_download_url(asset: GridAsset) -> str:
+    """URL for the artwork picker preview.
+
+    SteamGridDB uses WebM clips as ``thumb`` for animated grids. Those are
+    not PNG/JPEG/GIF/WebP, so the picker would show "not a recognised
+    image". Preview the still/animated image instead; Steam still gets the
+    placeable payload from :func:`asset_download_url`.
+    """
+    thumb = asset.thumb.strip()
+    if thumb and is_http_url(thumb) and not _path_is_video(thumb):
+        return thumb
+    return asset_download_url(asset)
 
 
 def _retry_after_seconds(headers: Mapping[str, str]) -> float | None:
@@ -149,6 +182,7 @@ def _parse_asset(raw: Any, kind: str) -> GridAsset | None:
         nsfw=_as_bool(raw.get("nsfw")),
         humor=_as_bool(raw.get("humor")),
         epilepsy=_as_bool(raw.get("epilepsy")),
+        animated=_asset_is_animated(raw, url, thumb),
         lock=_as_bool(raw.get("lock")),
         author_name=_as_str(author.get("name")),
     )
@@ -191,7 +225,7 @@ class SteamGridDBClient:
             {
                 "Authorization": f"Bearer {self._api_key}",
                 "Accept": "application/json",
-                "User-Agent": "steam-desktop-importer/0.0.1",
+                "User-Agent": "steam-desktop-importer/1.0.0",
             }
         )
 
@@ -218,36 +252,65 @@ class SteamGridDBClient:
         dimensions: Sequence[str] | None = None,
         *,
         styles: Sequence[str] | None = None,
+        filters: ArtworkFilters | None = None,
     ) -> list[GridAsset]:
-        params = self._list_params(dimensions=dimensions, styles=styles)
-        payload = self._get_json(f"grids/game/{int(game_id)}", params)
-        return self._assets_from_data(payload, ArtworkKind.GRID)
+        params = self._list_params(
+            dimensions=dimensions,
+            styles=styles,
+            filters=filters,
+            include_styles=True,
+        )
+        return self._list_all_assets(f"grids/game/{int(game_id)}", params, ArtworkKind.GRID)
 
-    def get_heroes(self, game_id: int) -> list[GridAsset]:
-        payload = self._get_json(f"heroes/game/{int(game_id)}")
-        return self._assets_from_data(payload, ArtworkKind.HERO)
+    def get_heroes(
+        self,
+        game_id: int,
+        *,
+        filters: ArtworkFilters | None = None,
+    ) -> list[GridAsset]:
+        params = self._list_params(filters=filters, include_styles=False)
+        return self._list_all_assets(f"heroes/game/{int(game_id)}", params, ArtworkKind.HERO)
 
-    def get_logos(self, game_id: int) -> list[GridAsset]:
-        payload = self._get_json(f"logos/game/{int(game_id)}")
-        return self._assets_from_data(payload, ArtworkKind.LOGO)
+    def get_logos(
+        self,
+        game_id: int,
+        *,
+        filters: ArtworkFilters | None = None,
+    ) -> list[GridAsset]:
+        params = self._list_params(filters=filters, include_styles=False)
+        return self._list_all_assets(f"logos/game/{int(game_id)}", params, ArtworkKind.LOGO)
 
-    def get_icons(self, game_id: int) -> list[GridAsset]:
-        payload = self._get_json(f"icons/game/{int(game_id)}")
-        return self._assets_from_data(payload, ArtworkKind.ICON)
+    def get_icons(
+        self,
+        game_id: int,
+        *,
+        filters: ArtworkFilters | None = None,
+    ) -> list[GridAsset]:
+        params = self._list_params(filters=filters, include_styles=False)
+        return self._list_all_assets(f"icons/game/{int(game_id)}", params, ArtworkKind.ICON)
 
-    def download_asset(self, asset: GridAsset, temp_path, *, max_bytes: int | None = None):
+    def download_asset(
+        self,
+        asset: GridAsset,
+        temp_path,
+        *,
+        max_bytes: int | None = None,
+        preview: bool = False,
+    ):
         """Download artwork to ``temp_path``. See :mod:`.download`.
 
         ``.ico`` icons are fetched via :func:`asset_download_url` so the
-        placed file is the PNG thumb Steam can actually use.
+        placed file is the PNG thumb Steam can actually use. ``preview=True``
+        skips WebM thumbs and fetches a still/animated image instead.
         """
-        from .download import download_url
+        from .download import DOWNLOAD_READ_TIMEOUT, download_url
 
+        url = preview_download_url(asset) if preview else asset_download_url(asset)
         return download_url(
-            asset_download_url(asset),
+            url,
             temp_path,
             session=self.session,
-            timeout=(self.connect_timeout, self.read_timeout),
+            timeout=(self.connect_timeout, max(self.read_timeout, DOWNLOAD_READ_TIMEOUT)),
             max_bytes=max_bytes,
         )
 
@@ -256,13 +319,44 @@ class SteamGridDBClient:
         *,
         dimensions: Sequence[str] | None = None,
         styles: Sequence[str] | None = None,
+        filters: ArtworkFilters | None = None,
+        include_styles: bool = True,
     ) -> dict[str, str]:
-        params: dict[str, str] = {}
+        chosen = filters or DEFAULT_ARTWORK_FILTERS
+        params = chosen.as_query(include_styles=False)
         if dimensions:
             params["dimensions"] = ",".join(dimensions)
-        if styles:
-            params["styles"] = ",".join(styles)
+        if include_styles:
+            style_list = tuple(styles) if styles is not None else chosen.styles
+            if style_list:
+                params["styles"] = ",".join(style_list)
         return params
+
+    def _list_all_assets(
+        self, path: str, params: dict[str, str], kind: str
+    ) -> list[GridAsset]:
+        """Follow SteamGridDB ``page`` / ``total`` until the listing is complete."""
+        assets: list[GridAsset] = []
+        seen: set[int] = set()
+        for page in range(_LIST_PAGE_LIMIT):
+            query = dict(params)
+            query["page"] = str(page)
+            payload = self._get_json(path, query)
+            batch = self._assets_from_data(payload, kind)
+            for asset in batch:
+                if asset.id in seen:
+                    continue
+                seen.add(asset.id)
+                assets.append(asset)
+            total = _as_int(payload.get("total"))
+            limit = _as_int(payload.get("limit")) or 50
+            if not batch:
+                break
+            if total is not None and len(assets) >= total:
+                break
+            if len(batch) < limit:
+                break
+        return assets
 
     def _games_from_data(self, payload: dict[str, Any]) -> list[GameResult]:
         data = payload.get("data")

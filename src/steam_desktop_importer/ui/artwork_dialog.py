@@ -8,11 +8,11 @@ This dialog never writes Steam ``grid/`` files; it only fills caller temps.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThreadPool
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QTimer, Qt, QThreadPool
+from PySide6.QtGui import QImage, QMovie, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QDialog,
     QHBoxLayout,
@@ -27,8 +27,8 @@ from PySide6.QtWidgets import (
 )
 
 from ..models import DesktopApplication
+from ..state import StateStore
 from ..steam.artwork import (
-    MAX_ASSETS_PER_SLOT,
     SLOT_HERO,
     SLOT_ICON,
     SLOT_LOGO,
@@ -37,9 +37,13 @@ from ..steam.artwork import (
     SLOTS,
     slot_for_grid,
 )
+from ..steamgriddb.apng import parse_apng
 from ..steamgriddb.client import SteamGridDBClient
+from ..steamgriddb.filters import ArtworkFilters
+from ..steamgriddb.images import sniff_image
 from ..steamgriddb.models import GameResult, GridAsset
 from ..steamgriddb.queries import search_queries
+from .artwork_filters import ArtworkFilterBar
 from .workers import CallableWorker
 
 __all__ = [
@@ -82,19 +86,77 @@ def _asset_label(asset: GridAsset) -> str:
         else "unknown size"
     )
     style = asset.style or asset.kind
-    return f"{size} · {style} · #{asset.id}"
+    flags: list[str] = []
+    if asset.animated:
+        flags.append("animated")
+    if asset.nsfw:
+        flags.append("NSFW")
+    if asset.humor:
+        flags.append("joke")
+    if asset.epilepsy:
+        flags.append("epilepsy")
+    suffix = f" · {' · '.join(flags)}" if flags else ""
+    return f"{size} · {style} · #{asset.id}{suffix}"
 
 
-def _group_assets(client: SteamGridDBClient, game_id: int) -> dict[str, list[GridAsset]]:
+def _compose_apng(animation, box) -> tuple[list[QPixmap], list[int]] | None:
+    """Rasterise APNG frames onto a canvas and scale them for the preview label."""
+    canvas = QImage(animation.width, animation.height, QImage.Format.Format_ARGB32)
+    canvas.fill(Qt.GlobalColor.transparent)
+    pixmaps: list[QPixmap] = []
+    delays: list[int] = []
+    for frame in animation.frames:
+        before = canvas.copy() if frame.dispose_op == 2 else None
+        image = QImage.fromData(frame.png_bytes)
+        if image.isNull():
+            return None
+        painter = QPainter(canvas)
+        if frame.blend_op == 0:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        else:
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.drawImage(frame.x, frame.y, image)
+        painter.end()
+        pixmap = QPixmap.fromImage(canvas)
+        if box.width() > 0 and box.height() > 0:
+            pixmap = pixmap.scaled(
+                box,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        pixmaps.append(pixmap)
+        # Some SteamGridDB APNGs hold the first frame for several seconds.
+        delays.append(min(frame.delay_ms, 1000))
+        if frame.dispose_op == 1:
+            painter = QPainter(canvas)
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            painter.fillRect(
+                frame.x,
+                frame.y,
+                frame.width,
+                frame.height,
+                Qt.GlobalColor.transparent,
+            )
+            painter.end()
+        elif frame.dispose_op == 2 and before is not None:
+            canvas = before
+    if len(pixmaps) < 2:
+        return None
+    return pixmaps, delays
+
+
+def _group_assets(
+    client: SteamGridDBClient,
+    game_id: int,
+    filters: ArtworkFilters | None = None,
+) -> dict[str, list[GridAsset]]:
     grouped: dict[str, list[GridAsset]] = {slot: [] for slot in SLOTS}
-    for asset in client.get_grids(game_id):
+    for asset in client.get_grids(game_id, filters=filters):
         slot = slot_for_grid(width=asset.width, height=asset.height)
         grouped[slot].append(asset)
-    grouped[SLOT_HERO] = list(client.get_heroes(game_id))
-    grouped[SLOT_LOGO] = list(client.get_logos(game_id))
-    grouped[SLOT_ICON] = list(client.get_icons(game_id))
-    for slot in SLOTS:
-        grouped[slot] = grouped[slot][:MAX_ASSETS_PER_SLOT]
+    grouped[SLOT_HERO] = list(client.get_heroes(game_id, filters=filters))
+    grouped[SLOT_LOGO] = list(client.get_logos(game_id, filters=filters))
+    grouped[SLOT_ICON] = list(client.get_icons(game_id, filters=filters))
     return grouped
 
 
@@ -109,6 +171,7 @@ class ArtworkDialog(QDialog):
         *,
         client_factory: Callable[[], SteamGridDBClient] | None = None,
         inline_workers: bool = False,
+        store: StateStore | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"Artwork — {_display_name(app)}")
@@ -121,6 +184,14 @@ class ArtworkDialog(QDialog):
         self._choice = ArtworkChoice()
         self._assets: dict[str, list[GridAsset]] = {slot: [] for slot in SLOTS}
         self._preview_bytes: bytes | None = None
+        self._preview_movie: QMovie | None = None
+        self._preview_buffer: QBuffer | None = None
+        self._preview_frames: list[QPixmap] = []
+        self._preview_delays: list[int] = []
+        self._preview_index = 0
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.timeout.connect(self._on_preview_tick)
 
         name = _display_name(app)
         queries = search_queries(name)
@@ -130,9 +201,10 @@ class ArtworkDialog(QDialog):
         layout.addWidget(
             QLabel(
                 "Search SteamGridDB, pick a game, then choose artwork for each "
-                "slot. If you do not care which art is used, Use first matches "
-                "adds the first result in each slot. Skip or Cancel leaves the "
-                "shortcut without custom art."
+                "slot. Filters match Steam ROM Manager: Static is on by default; "
+                "Animated, NSFW, Joke, and Epilepsy are opt-in. If you do not "
+                "care which art is used, Use first matches adds the first result "
+                "in each slot. Skip or Cancel leaves the shortcut without custom art."
             )
         )
 
@@ -144,6 +216,10 @@ class ArtworkDialog(QDialog):
         search_row.addWidget(self.search_edit, 1)
         search_row.addWidget(self.search_button)
         layout.addLayout(search_row)
+
+        self.filter_bar = ArtworkFilterBar(store=store)
+        self.filter_bar.changed.connect(self._on_filters_changed)
+        layout.addWidget(self.filter_bar)
 
         body = QHBoxLayout()
         self.game_list = QListWidget()
@@ -227,6 +303,7 @@ class ArtworkDialog(QDialog):
         self._busy = busy
         self.search_button.setEnabled(not busy)
         self.search_edit.setEnabled(not busy)
+        self.filter_bar.setEnabled(not busy)
         self.game_list.setEnabled(not busy)
         self.use_first_button.setEnabled(not busy)
         self.use_button.setEnabled(not busy)
@@ -254,9 +331,8 @@ class ArtworkDialog(QDialog):
             listing.blockSignals(True)
             listing.clear()
             listing.blockSignals(False)
-        self.preview.setPixmap(QPixmap())
+        self._clear_preview()
         self.preview.setText("No preview")
-        self._preview_bytes = None
 
     def _with_client(self, fn):
         client = self._client_factory()
@@ -319,9 +395,17 @@ class ArtworkDialog(QDialog):
         self._set_busy(True, f"Loading artwork for {game.name}…")
 
         def work() -> dict[str, list[GridAsset]]:
-            return self._with_client(lambda client: _group_assets(client, game.id))
+            filters = self.filter_bar.filters()
+            return self._with_client(
+                lambda client: _group_assets(client, game.id, filters)
+            )
 
         self._submit(work, self._on_assets_done, self._on_assets_failed)
+
+    def _on_filters_changed(self) -> None:
+        if self._busy or self.game_list.currentItem() is None:
+            return
+        self._on_game_selected()
 
     def _on_assets_done(self, grouped: object) -> None:
         self._set_busy(False)
@@ -336,8 +420,8 @@ class ArtworkDialog(QDialog):
                 row.setData(Qt.ItemDataRole.UserRole, asset)
                 listing.addItem(row)
             listing.blockSignals(False)
+        self._clear_preview()
         self.preview.setText("Select an image to preview.")
-        self.preview.setPixmap(QPixmap())
         self.status.setText(
             "Choose artwork, or Use first matches if you do not care which "
             "result is picked."
@@ -362,30 +446,105 @@ class ArtworkDialog(QDialog):
         asset = self._selected_asset()
         if asset is None:
             return
-        url = asset.thumb or asset.url
         self._set_busy(True, "Loading preview…")
 
-        def work() -> bytes:
-            def download(client: SteamGridDBClient) -> bytes:
+        def work() -> tuple[bytes, GridAsset]:
+            def download(client: SteamGridDBClient) -> tuple[bytes, GridAsset]:
                 path = self._dest_dir / f"preview-{asset.id}"
-                to_fetch = asset if url == asset.url else replace(asset, url=url)
-                client.download_asset(to_fetch, path)
-                return path.read_bytes()
+                client.download_asset(asset, path, preview=True)
+                return path.read_bytes(), asset
 
             return self._with_client(download)
 
         self._submit(work, self._on_preview_done, self._on_preview_failed)
 
-    def _on_preview_done(self, payload: object) -> None:
+    def _clear_preview(self) -> None:
+        self._preview_timer.stop()
+        self._preview_frames = []
+        self._preview_delays = []
+        self._preview_index = 0
+        if self._preview_movie is not None:
+            self._preview_movie.stop()
+        self.preview.setMovie(QMovie())
+        self._preview_movie = None
+        self._preview_buffer = None
+        self.preview.setPixmap(QPixmap())
+        self._preview_bytes = None
+
+    def _show_preview_movie(self, payload: bytes) -> bool:
+        buffer = QBuffer()
+        buffer.setData(QByteArray(payload))
+        if not buffer.open(QIODevice.OpenModeFlag.ReadOnly):
+            return False
+        movie = QMovie()
+        movie.setDevice(buffer)
+        movie.setCacheMode(QMovie.CacheMode.CacheAll)
+        if not movie.isValid() or not movie.jumpToFrame(0):
+            return False
+        frame = movie.currentPixmap()
+        if frame.isNull():
+            return False
+        box = self.preview.size()
+        if box.width() > 0 and box.height() > 0:
+            movie.setScaledSize(
+                frame.size().scaled(box, Qt.AspectRatioMode.KeepAspectRatio)
+            )
+        self._preview_buffer = buffer
+        self._preview_movie = movie
+        self.preview.setMovie(movie)
+        movie.start()
+        return True
+
+    def _show_preview_apng(self, payload: bytes) -> bool:
+        animation = parse_apng(payload)
+        if animation is None:
+            return False
+        frames = _compose_apng(animation, self.preview.size())
+        if frames is None:
+            return False
+        pixmaps, delays = frames
+        self._preview_frames = pixmaps
+        self._preview_delays = delays
+        self._preview_index = 0
+        self.preview.setPixmap(pixmaps[0])
+        if len(pixmaps) > 1:
+            self._preview_timer.start(delays[0])
+        return True
+
+    def _on_preview_tick(self) -> None:
+        if not self._preview_frames:
+            return
+        self._preview_index = (self._preview_index + 1) % len(self._preview_frames)
+        self.preview.setPixmap(self._preview_frames[self._preview_index])
+        self._preview_timer.start(self._preview_delays[self._preview_index])
+
+    def _on_preview_done(self, result: object) -> None:
         self._set_busy(False)
-        if not isinstance(payload, (bytes, bytearray)):
+        if not isinstance(result, tuple) or len(result) != 2:
+            self._clear_preview()
             self.preview.setText("Preview unavailable.")
             return
+        payload, asset = result
+        if not isinstance(payload, (bytes, bytearray)) or not isinstance(asset, GridAsset):
+            self._clear_preview()
+            self.preview.setText("Preview unavailable.")
+            return
+        data = bytes(payload)
+        self._clear_preview()
+        kind = sniff_image(data)
+        if kind in {"gif", "webp"} and self._show_preview_movie(data):
+            self._preview_bytes = data
+            self.status.setText("")
+            return
+        if kind == "png" and self._show_preview_apng(data):
+            self._preview_bytes = data
+            self.status.setText("")
+            return
         pixmap = QPixmap()
-        if not pixmap.loadFromData(bytes(payload)):
+        if not pixmap.loadFromData(data):
             self.preview.setText("Preview could not be decoded.")
             return
-        self._preview_bytes = bytes(payload)
+        self._preview_bytes = data
         self.preview.setPixmap(
             pixmap.scaled(
                 self.preview.size(),
@@ -397,8 +556,7 @@ class ArtworkDialog(QDialog):
 
     def _on_preview_failed(self, message: str) -> None:
         self._set_busy(False)
-        self._preview_bytes = None
-        self.preview.setPixmap(QPixmap())
+        self._clear_preview()
         self.preview.setText("Preview unavailable.")
         self.status.setText(message)
 
@@ -434,12 +592,18 @@ class ArtworkDialog(QDialog):
         return chosen
 
     def _use_selected(self) -> None:
-        self._download_assets(self._selections() or self._first_assets())
+        selected = self._selections()
+        if selected:
+            self._download_assets(selected, try_next=False)
+            return
+        self._download_assets(self._first_assets(), try_next=True)
 
     def _use_first_matches(self) -> None:
-        self._download_assets(self._first_assets())
+        self._download_assets(self._first_assets(), try_next=True)
 
-    def _download_assets(self, chosen: dict[str, GridAsset]) -> None:
+    def _download_assets(
+        self, chosen: dict[str, GridAsset], *, try_next: bool = False
+    ) -> None:
         if self._busy:
             return
         if not chosen:
@@ -448,25 +612,36 @@ class ArtworkDialog(QDialog):
         self._set_busy(True, "Downloading artwork…")
         dest_dir = self._dest_dir
         desktop_id = self._app.desktop_id
+        slot_lists = {
+            slot: list(self._assets.get(slot) or []) for slot in chosen
+        }
 
         def work() -> dict[str, Path]:
             def download(client: SteamGridDBClient) -> dict[str, Path]:
                 files: dict[str, Path] = {}
                 errors: list[str] = []
                 for slot, asset in chosen.items():
-                    path = dest_dir / f"{desktop_id}_{slot}_{asset.id}"
-                    try:
-                        client.download_asset(asset, path)
-                    except Exception as error:  # noqa: BLE001 — keep other slots
-                        errors.append(f"{_TAB_LABELS[slot]}: {error}")
-                        continue
-                    files[slot] = path
+                    candidates = [asset]
+                    if try_next:
+                        rest = [item for item in slot_lists.get(slot, []) if item.id != asset.id]
+                        candidates = [asset, *rest]
+                    last_error: Exception | None = None
+                    for candidate in candidates:
+                        path = dest_dir / f"{desktop_id}_{slot}_{candidate.id}"
+                        try:
+                            client.download_asset(candidate, path)
+                        except Exception as error:  # noqa: BLE001 — try next / other slots
+                            last_error = error
+                            continue
+                        files[slot] = path
+                        last_error = None
+                        break
+                    if last_error is not None:
+                        errors.append(f"{_TAB_LABELS[slot]}: {last_error}")
                 if not files:
                     raise RuntimeError(
                         errors[0] if errors else "Nothing could be downloaded."
                     )
-                if errors:
-                    raise RuntimeError("; ".join(errors))
                 return files
 
             return self._with_client(download)

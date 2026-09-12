@@ -19,14 +19,16 @@ from steam_desktop_importer.steamgriddb import (
     SteamGridDBClient,
     SteamGridDBTimeoutError,
     asset_download_url,
+    preview_download_url,
     clear_stored_api_key,
     default_key_path,
     resolve_api_key,
     save_api_key,
     search_queries,
     sniff_image,
+    unrecognised_image_reason,
 )
-from steam_desktop_importer.steamgriddb.download import download_url
+from steam_desktop_importer.steamgriddb.download import DEFAULT_MAX_BYTES, download_url
 
 PNG_1X1 = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
@@ -232,6 +234,104 @@ def test_grids_heroes_logos_icons(monkeypatch):
     client.get_grids(1, dimensions=["600x900", "342x482"], styles=["material"])
     assert recorded["params"]["dimensions"] == "600x900,342x482"
     assert recorded["params"]["styles"] == "material"
+    assert recorded["params"]["nsfw"] == "false"
+    assert recorded["params"]["humor"] == "false"
+    assert recorded["params"]["epilepsy"] == "false"
+    assert recorded["params"]["types"] == "static"
+
+
+def test_listing_follows_pagination():
+    def page_payload(ids: list[int], page: int, total: int = 3):
+        return FakeResponse(
+            200,
+            {
+                "success": True,
+                "page": page,
+                "limit": 2,
+                "total": total,
+                "data": [
+                    {"id": item, "url": f"https://cdn.example/{item}.png"} for item in ids
+                ],
+            },
+        )
+
+    client = _client([page_payload([1, 2], 0), page_payload([3], 1)])
+    grids = client.get_grids(1)
+    assert [asset.id for asset in grids] == [1, 2, 3]
+    assert client.session.script == []
+    assert len(client.session.calls) == 2
+
+
+def test_listing_filters_opt_into_nsfw_humor_and_animated():
+    from steam_desktop_importer.steamgriddb import ArtworkFilters
+
+    recorded = {}
+
+    def capture(method, url, **kwargs):
+        recorded["params"] = kwargs.get("params")
+        return FakeResponse(200, {"success": True, "data": []})
+
+    client = _client([])
+    client.session.request = capture
+    filters = ArtworkFilters.from_allows(nsfw=True, humor=True, animated=True, static=True)
+    client.get_heroes(9, filters=filters)
+    assert recorded["params"]["nsfw"] == "any"
+    assert recorded["params"]["humor"] == "any"
+    assert recorded["params"]["types"] == "static,animated"
+    assert "styles" not in recorded["params"]
+
+
+def test_asset_parses_nsfw_humor_and_animated_type():
+    client = _client(
+        [
+            FakeResponse(
+                200,
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": 3,
+                            "url": "https://cdn.example/a.webp",
+                            "nsfw": True,
+                            "humor": True,
+                            "epilepsy": True,
+                            "type": "animated",
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+    asset = client.get_grids(1)[0]
+    assert asset.nsfw is True
+    assert asset.humor is True
+    assert asset.epilepsy is True
+    assert asset.animated is True
+
+
+def test_webm_thumb_marks_asset_animated_when_type_is_missing():
+    client = _client(
+        [
+            FakeResponse(
+                200,
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": 116506,
+                            "url": "https://cdn.example/a.png",
+                            "thumb": "https://cdn.example/a.webm",
+                            "mime": "image/png",
+                        }
+                    ],
+                },
+            )
+        ]
+    )
+    asset = client.get_grids(1)[0]
+    assert asset.animated is True
+    assert preview_download_url(asset) == asset.url
+    assert asset_download_url(asset) == asset.url
 
 
 def test_invalid_asset_url_is_dropped():
@@ -304,6 +404,10 @@ def test_sniff_image_accepts_png_jpeg_gif_webp():
     assert sniff_image(b"GIF89a....") == "gif"
     assert sniff_image(WEBP_HEADER) == "webp"
     assert sniff_image(b"<!DOCTYPE html>") is None
+    assert sniff_image(b"\x1aE\xdf\xa3") is None
+    assert unrecognised_image_reason(b"\x1aE\xdf\xa3....") == "WebM video, not a still image"
+    assert unrecognised_image_reason(b"") == "empty file"
+    assert unrecognised_image_reason(b'{"code":"not found"}') == "JSON"
 
 
 def test_download_png_to_temp(tmp_path):
@@ -334,6 +438,38 @@ def test_download_rejects_html(tmp_path):
         download_url("https://cdn.example/nope", dest, session=session)
     assert not dest.exists()
     assert not (tmp_path / "art.png.part").exists()
+
+
+def test_download_limit_allows_large_animated_heroes():
+    assert DEFAULT_MAX_BYTES >= 50 * 1024 * 1024
+
+
+def test_download_rejects_declared_length_over_limit(tmp_path):
+    session = ScriptedSession(
+        [
+            FakeResponse(
+                200,
+                json_body=None,
+                content=PNG_1X1,
+                headers={"Content-Length": str(200 * 1024 * 1024)},
+                url="https://cdn.example/huge.png",
+            )
+        ]
+    )
+    dest = tmp_path / "art.png"
+    with pytest.raises(InvalidResponseError, match="limit 100 MB"):
+        download_url("https://cdn.example/huge.png", dest, session=session)
+    assert not dest.exists()
+
+
+def test_download_aborts_when_body_exceeds_limit(tmp_path):
+    session = ScriptedSession(
+        [FakeResponse(200, json_body=None, content=b"x" * 80, url="https://cdn.example/a")]
+    )
+    dest = tmp_path / "art.png"
+    with pytest.raises(InvalidResponseError, match="exceeded"):
+        download_url("https://cdn.example/a", dest, session=session, max_bytes=50)
+    assert not dest.exists()
 
 
 def test_ico_assets_download_the_png_thumb(tmp_path):
@@ -367,6 +503,28 @@ def test_png_icons_still_download_the_full_url():
         mime="image/png",
     )
     assert asset_download_url(asset) == asset.url
+    assert preview_download_url(asset) == asset.thumb
+
+
+def test_preview_download_skips_webm_thumbs(tmp_path):
+    asset = GridAsset(
+        id=116506,
+        kind="grid",
+        url="https://cdn.example/grid.png",
+        thumb="https://cdn.example/thumb.webm",
+        mime="image/png",
+    )
+    assert preview_download_url(asset) == asset.url
+    session = ScriptedSession(
+        [FakeResponse(200, json_body=None, content=PNG_1X1, url=asset.url)]
+    )
+    client = SteamGridDBClient(
+        "test-secret-key", session=session, sleeper=lambda _delay: None
+    )
+    dest = tmp_path / "preview"
+    client.download_asset(asset, dest, preview=True)
+    assert dest.read_bytes() == PNG_1X1
+    assert session.calls[-1][1] == asset.url
 
 
 def test_download_accepts_webp_with_png_name(tmp_path):

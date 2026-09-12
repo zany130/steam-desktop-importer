@@ -74,16 +74,20 @@ host.
 
 ## What the importer will and will not touch
 
-Assignable: `favorite`, `uc-*`, `srm-*`, `boilr*`, `sdi-*`, and anything
-else that is live and not skipped.
+Assignable: `favorite`, `uc-*` without a `filterSpec`, `srm-*`, `boilr*`,
+`sdi-*`, and `from-tag-*` store-tag shelves. The UI labels tag shelves
+`{name} (tag collection)`.
 
-Skipped: `hidden` (Steam's hidden-games collection) and `from-tag-*`
-(store-tag derived). They are listed by `debug collections` as skipped.
+Skipped: `hidden` (Steam's hidden-games collection) and Dynamic Collections
+(a `uc-*` record with `filterSpec`). They are omitted from the checklist and
+listed by `debug collections` as `skipped` / `dynamic`. Typing a skipped
+name is an error rather than creating a duplicate.
 
 New collections created here use an `sdi-` prefix so they are distinguishable
 from Steam `uc-` ids and SRM `srm-` ids. Typing a name that already exists
-(case-insensitive, assignable only) adds to that collection instead of
-creating a duplicate.
+(case-insensitive, assignable including `from-tag-*`) adds to that collection
+instead of creating a duplicate. When a user collection and a tag shelf share
+a name, the user collection wins.
 
 Unrelated keys (showcases, rollups, other namespaces) are not edited.
 Collections the user did not select are not tombstoned.

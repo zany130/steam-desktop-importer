@@ -329,6 +329,41 @@ def test_planning_failure_in_a_batch_writes_nothing(tmp_path):
     assert store.list_mappings(_installation(root).key, 11111111) == []
 
 
+def test_reimport_recreates_a_shortcut_removed_from_vdf(tmp_path):
+    root = tmp_path / "Steam"
+    installation = _installation(root)
+    account = _account(root)
+    app = make_app(tmp_path / "romm.desktop", desktop_id="romm.desktop")
+    extra = make_app(tmp_path / "extra.desktop", desktop_id="extra.desktop", name="Extra")
+    store = StateStore(":memory:")
+    first = apply_applications(
+        [app],
+        installation=installation,
+        account=account,
+        store=store,
+        steam_status=CLOSED,
+        hooks=_hooks(),
+    )
+    appid = first.imported[0].appid_unsigned
+    vdf_path = shortcuts_vdf_path(account)
+    vdf_path.write_bytes(ShortcutDocument.empty().dumps())
+    result = apply_applications(
+        [app, extra],
+        installation=installation,
+        account=account,
+        store=store,
+        steam_status=CLOSED,
+        hooks=_hooks(),
+    )
+    assert {item.desktop_id: item.action for item in result.imported} == {
+        "romm.desktop": "created",
+        "extra.desktop": "created",
+    }
+    document = ShortcutDocument.load(vdf_path)
+    assert document.find_by_appid(appid) is not None
+    assert document.find_by_appid(first_import_candidate("extra.desktop")) is not None
+
+
 def test_import_without_collections_does_not_create_cloud_storage(tmp_path):
     root = tmp_path / "Steam"
     account = _account(root)

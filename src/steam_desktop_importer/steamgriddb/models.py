@@ -53,5 +53,6 @@ class GridAsset:
     nsfw: bool = False
     humor: bool = False
     epilepsy: bool = False
+    animated: bool = False
     lock: bool = False
     author_name: str = ""

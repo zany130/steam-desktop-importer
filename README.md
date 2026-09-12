@@ -16,10 +16,12 @@ The GUI can import selected applications into `shortcuts.vdf` when Steam is
 closed. It never writes Steam userdata while Steam is running. With
 `SGDB_API_KEY` (or a saved key), it can search SteamGridDB, preview artwork,
 and write selected images into the account's `config/grid/` directory after
-the VDF commit. Without a key, import is shortcut-only. Checked collections
-(or a typed new name) are written afterwards into Steam's cloud-storage JSON;
-they are never invented by default. Flatpak Steam imports wrap host commands
-with `flatpak-spawn --host` and never grant sandbox permissions.
+the VDF commit. Without a key, import is shortcut-only. Artwork filters match
+Steam ROM Manager: static by default; NSFW, joke, epilepsy, and animated are
+opt-in. Checked collections (or a typed new name) are written afterwards into
+Steam's cloud-storage JSON; they are never invented by default. Flatpak Steam
+imports wrap host commands with `flatpak-spawn --host` and never grant sandbox
+permissions.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -83,6 +85,7 @@ steam-desktop-importer debug collections
 # Search SteamGridDB. Needs SGDB_API_KEY or a saved key. Never writes Steam.
 steam-desktop-importer debug steamgriddb search Kate
 steam-desktop-importer debug steamgriddb grids 2254 --dimensions 600x900
+steam-desktop-importer debug steamgriddb grids 2254 --nsfw any --humor any --types static,animated
 ```
 
 On the development host `debug scan` resolves 804 entries with 0 parse errors,

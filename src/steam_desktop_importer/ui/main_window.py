@@ -76,6 +76,7 @@ from ..steam import (
     shortcuts_vdf_path,
     steam_allows_write,
 )
+from ..steam.collections import collection_list_label, is_tag_collection_id
 from ..steam.running import SteamRunningStatus
 from ..steamgriddb.auth import resolve_api_key
 from .account_dialog import AccountDialog
@@ -143,6 +144,8 @@ class MainWindow(QMainWindow):
         self._selected_installation: SteamInstallation | None = None
         self._selected_account: SteamAccount | None = None
         self._collections_identity: tuple[str, int] | None = None
+        self._assignable_collection_names: set[str] = set()
+        self._unassignable_collection_names: dict[str, str] = {}
         self._running: SteamRunningStatus | None = None
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
@@ -325,13 +328,18 @@ class MainWindow(QMainWindow):
         self.collection_new.setPlaceholderText("New collection name (optional)")
         self.collection_new.setToolTip(
             "Creates a collection if no assignable collection already has this "
-            "name. Left blank, no collection is created."
+            "name (including tag collections). Names used by Hidden or Dynamic "
+            "Collections cannot be reused. Left blank, no collection is created."
         )
 
         collections_page = QWidget()
         collections_layout = QVBoxLayout(collections_page)
         collections_layout.setContentsMargins(0, 8, 0, 0)
-        hint = QLabel("Optional. Checked collections receive the imported shortcuts.")
+        hint = QLabel(
+            "Optional. Checked collections receive the imported shortcuts. "
+            "Store-tag shelves are labelled (tag collection). Hidden and "
+            "Dynamic Collections are omitted."
+        )
         hint.setWordWrap(True)
         collections_layout.addWidget(hint)
         collections_layout.addWidget(self.collection_filter)
@@ -911,6 +919,10 @@ class MainWindow(QMainWindow):
             if skipped
             else ""
         )
+        blocked_name = self._blocked_create_collection_reason()
+        if blocked_name is not None:
+            QMessageBox.warning(self, "Cannot create collection", blocked_name)
+            return
         account = self._selected_account
         installation = self._selected_installation
         assert account is not None and installation is not None
@@ -976,6 +988,10 @@ class MainWindow(QMainWindow):
             )
             return
         match = matches[0]
+        blocked_name = self._blocked_create_collection_reason()
+        if blocked_name is not None:
+            QMessageBox.warning(self, "Cannot create collection", blocked_name)
+            return
         account = self._selected_account
         installation = self._selected_installation
         assert account is not None and installation is not None
@@ -1021,7 +1037,7 @@ class MainWindow(QMainWindow):
             return {}
         files: dict[str, dict[str, Path]] = {}
         for app in apps:
-            dialog = ArtworkDialog(app, dest_dir, parent=self)
+            dialog = ArtworkDialog(app, dest_dir, parent=self, store=self._store)
             dialog.exec()
             choice = dialog.choice()
             if choice.action == ACTION_SKIP_REMAINING:
@@ -1165,6 +1181,23 @@ class MainWindow(QMainWindow):
                     checked.append(collection_id)
         return checked
 
+    def _blocked_create_collection_reason(self) -> str | None:
+        typed = self.collection_new.text().strip()
+        if not typed:
+            return None
+        fold = typed.casefold()
+        if fold in self._assignable_collection_names:
+            return None
+        blocked = self._unassignable_collection_names.get(fold)
+        if blocked is None:
+            return None
+        return (
+            f'Steam already has a collection named "{blocked}" that this '
+            "importer cannot add shortcuts to (Hidden or a Dynamic Collection). "
+            "Creating another with that name would show as a duplicate. Pick a "
+            "different name."
+        )
+
     def _collection_assignment(self) -> CollectionAssignment:
         name = self.collection_new.text().strip()
         return CollectionAssignment(
@@ -1202,6 +1235,8 @@ class MainWindow(QMainWindow):
         )
         self._collections_identity = current_identity
         self.collection_list.clear()
+        self._assignable_collection_names = set()
+        self._unassignable_collection_names = {}
         if self._selected_account is None:
             self._collections_identity = None
             self.collection_list.setEnabled(False)
@@ -1219,6 +1254,12 @@ class MainWindow(QMainWindow):
             self.collection_list.addItem(placeholder)
             self._filter_collections()
             return
+        for live in document.live_collections():
+            fold = live.name.casefold()
+            if live.assignable:
+                self._assignable_collection_names.add(fold)
+            else:
+                self._unassignable_collection_names[fold] = live.name
         collections = sorted(
             document.assignable_collections(),
             key=lambda item: item.name.casefold(),
@@ -1230,7 +1271,7 @@ class MainWindow(QMainWindow):
             self._filter_collections()
             return
         for collection in collections:
-            item = QListWidgetItem(collection.name)
+            item = QListWidgetItem(collection_list_label(collection))
             item.setData(Qt.ItemDataRole.UserRole, collection.collection_id)
             item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled
@@ -1243,9 +1284,15 @@ class MainWindow(QMainWindow):
                 else Qt.CheckState.Unchecked
             )
             item.setCheckState(checked)
-            item.setToolTip(
-                f"{collection.collection_id} — {len(collection.added)} games"
-            )
+            if is_tag_collection_id(collection.collection_id):
+                item.setToolTip(
+                    f"{collection.collection_id} — Steam store-tag collection, "
+                    f"{len(collection.added)} games"
+                )
+            else:
+                item.setToolTip(
+                    f"{collection.collection_id} — {len(collection.added)} games"
+                )
             self.collection_list.addItem(item)
         self._filter_collections()
 

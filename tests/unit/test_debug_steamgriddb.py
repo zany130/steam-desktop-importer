@@ -22,6 +22,30 @@ def test_steamgriddb_grids_command_is_registered():
     assert args.dimensions == ["600x900"]
 
 
+def test_steamgriddb_grids_filters_are_registered():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "debug",
+            "steamgriddb",
+            "grids",
+            "2254",
+            "--nsfw",
+            "any",
+            "--humor",
+            "any",
+            "--types",
+            "static,animated",
+            "--styles",
+            "alternate",
+        ]
+    )
+    assert args.nsfw == "any"
+    assert args.humor == "any"
+    assert args.types == ["static,animated"]
+    assert args.styles == ["alternate"]
+
+
 def test_steamgriddb_search_without_a_key_does_not_write(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.delenv("SGDB_API_KEY", raising=False)

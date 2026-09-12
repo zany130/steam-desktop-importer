@@ -6,7 +6,7 @@ Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 launching is experimental and fixture-tested; live TEST-001 is not validated
 on this host. This importer never mutates Steam userdata while Steam is
 running. v1.0.0 is source/venv plus an AppImage.
-489 tests passing.**
+496 tests passing.**
 Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
 artwork is placed under a userdata `config/grid/` only through
 `steam/artwork.py`. Collection JSON is replaced only through
@@ -405,6 +405,8 @@ to run the suite. Artwork is downloaded only to a caller-supplied temp path.
 - [x] API key never appears in exception text
 - [x] Settings field for the key; env var takes precedence
 - [x] `debug steamgriddb search|grids|heroes|logos|icons`
+- [x] Listing filters: static/animated, NSFW, humor/joke, epilepsy, grid style
+      (SteamGridDB defaults; opt-in like Steam ROM Manager)
 
 Tests: valid response, no results, 401, 404, 429, timeout, non-image.
 
@@ -423,6 +425,8 @@ commit. A missing API key keeps import shortcut-only.
 - [x] Previews, per-slot selection, skip, skip remaining, cancel=skip;
       Use first matches (and Use selected with no picks) takes the first
       result in each slot when the user does not care which art is used
+- [x] SteamGridDB filters (static/animated, NSFW, joke, epilepsy, grid style)
+      in the artwork dialog and Settings; remembered in the SQLite store
 - [x] Unsigned 32-bit decimal naming (`<id>p`, `<id>`, `_hero`, `_logo`, `_icon`)
 - [x] Not the derived 64-bit `game_id` (rule 13)
 - [x] Persistent shortcut `icon` is the absolute `_icon` path (§20)
@@ -486,7 +490,8 @@ live-Steam edit path and no live UI release gate. Recorded in
 - [x] Backup + parse-back; collection failure does not roll back the VDF
 - [x] No default collection; user must check an existing one or type a name
 - [x] Collections tab (filter + full-height checklist); Details stays the default
-- [x] `hidden` and `from-tag-*` are not assignable
+- [x] `hidden` and Dynamic Collections (`filterSpec`) are not assignable
+- [x] `from-tag-*` tag collections are assignable and labelled `(tag collection)`
 - [x] New collections use an `sdi-` prefix; name match reuses an existing one
 - [x] Unrelated namespace keys and unselected collections are left intact
 - [x] `debug collections` is read-only

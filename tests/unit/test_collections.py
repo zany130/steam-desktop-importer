@@ -9,7 +9,9 @@ from steam_desktop_importer.models import SteamAccount
 from steam_desktop_importer.steam.collections import (
     CollectionAssignment,
     CollectionDocument,
+    collection_list_label,
     is_assignable_collection_id,
+    is_tag_collection_id,
     load_collections,
 )
 
@@ -97,6 +99,20 @@ def seed_cloud_storage(account: SteamAccount) -> Path:
             version="12",
         ),
         _live(
+            "user-collections.uc-DYNA",
+            json.dumps(
+                {
+                    "id": "uc-DYNA",
+                    "name": "Verified and Playable on Deck",
+                    "added": [42],
+                    "removed": [],
+                    "filterSpec": {"nFormatVersion": 2, "filterGroups": []},
+                },
+                separators=(",", ":"),
+            ),
+            version="12",
+        ),
+        _live(
             "user-collections.uc-CCCC",
             _value("uc-CCCC", "Tools", [0xD14E78F7], removed=[55]),
             version="1788993193",  # third-party timestamp-as-version; ignore for bump
@@ -119,13 +135,15 @@ def seed_cloud_storage(account: SteamAccount) -> Path:
     return cloud
 
 
-def test_assignable_filter_skips_hidden_and_from_tag():
+def test_assignable_filter_skips_hidden_not_from_tag():
     assert is_assignable_collection_id("uc-BBBB") is True
     assert is_assignable_collection_id("favorite") is True
     assert is_assignable_collection_id("srm-RW11") is True
     assert is_assignable_collection_id("sdi-abc") is True
+    assert is_assignable_collection_id("from-tag-Action") is True
     assert is_assignable_collection_id("hidden") is False
-    assert is_assignable_collection_id("from-tag-Action") is False
+    assert is_tag_collection_id("from-tag-Action") is True
+    assert is_tag_collection_id("uc-BBBB") is False
 
 
 def test_load_lists_live_collections_and_prefers_namespace_1(tmp_path):
@@ -138,9 +156,18 @@ def test_load_lists_live_collections_and_prefers_namespace_1(tmp_path):
     assert live["uc-BBBB"].name == "Linux Apps"
     assert live["uc-BBBB"].added == (10, 20)
     assert live["hidden"].assignable is False
-    assert live["from-tag-Action"].assignable is False
+    assert live["from-tag-Action"].assignable is True
+    assert live["uc-DYNA"].assignable is False
+    assert live["uc-DYNA"].dynamic is True
+    assert collection_list_label(live["from-tag-Action"]) == "Action (tag collection)"
     assignable = {item.collection_id for item in document.assignable_collections()}
-    assert assignable == {"uc-BBBB", "srm-RW11", "favorite", "uc-CCCC"}
+    assert assignable == {
+        "uc-BBBB",
+        "srm-RW11",
+        "favorite",
+        "uc-CCCC",
+        "from-tag-Action",
+    }
 
 
 def test_add_to_existing_uses_unsigned_32_bit_and_clears_removed(tmp_path):
@@ -188,6 +215,56 @@ def test_create_collection_uses_sdi_prefix_and_name_match(tmp_path):
     assert hidden.added == (999,)
 
 
+def test_create_name_matching_from_tag_adds_to_it(tmp_path):
+    account = _account(tmp_path / "Steam")
+    seed_cloud_storage(account)
+    document = load_collections(account)
+    errors = document.apply_assignment(
+        CollectionAssignment(create_names=("Action", "Desktop")),
+        [3511661831],
+        now=1_800_000_000,
+    )
+    assert errors == []
+    created = [item for item in document.live_collections() if item.collection_id.startswith("sdi-")]
+    assert len(created) == 1
+    assert created[0].name == "Desktop"
+    tag = next(
+        item for item in document.live_collections() if item.collection_id == "from-tag-Action"
+    )
+    assert 7 in tag.added
+    assert 3511661831 in tag.added
+
+
+def test_create_name_matching_dynamic_is_refused(tmp_path):
+    account = _account(tmp_path / "Steam")
+    seed_cloud_storage(account)
+    document = load_collections(account)
+    errors = document.apply_assignment(
+        CollectionAssignment(create_names=("Verified and Playable on Deck",)),
+        [1],
+        now=10,
+    )
+    assert errors
+    assert any("uc-DYNA" in error for error in errors)
+    assert not any(item.collection_id.startswith("sdi-") for item in document.live_collections())
+    dynamic = next(item for item in document.live_collections() if item.collection_id == "uc-DYNA")
+    assert dynamic.added == (42,)
+
+
+def test_create_name_matching_hidden_is_refused(tmp_path):
+    account = _account(tmp_path / "Steam")
+    seed_cloud_storage(account)
+    document = load_collections(account)
+    errors = document.apply_assignment(
+        CollectionAssignment(create_names=("hidden",)),
+        [1],
+        now=10,
+    )
+    assert errors
+    assert any("hidden" in error for error in errors)
+    assert not any(item.collection_id.startswith("sdi-") for item in document.live_collections())
+
+
 def test_missing_cloud_storage_is_an_empty_document(tmp_path):
     account = _account(tmp_path / "Steam")
     document = CollectionDocument.load(account)
@@ -203,20 +280,39 @@ def test_missing_cloud_storage_is_an_empty_document(tmp_path):
     assert document.index[0][1] == "1"
 
 
-def test_refuses_hidden_and_from_tag_even_if_requested(tmp_path):
+def test_refuses_hidden_and_dynamic_even_if_requested(tmp_path):
     account = _account(tmp_path / "Steam")
     seed_cloud_storage(account)
     document = load_collections(account)
     errors = document.apply_assignment(
-        CollectionAssignment(existing_ids=("hidden", "from-tag-Action", "missing")),
+        CollectionAssignment(existing_ids=("hidden", "uc-DYNA", "missing")),
         [1],
         now=10,
     )
     assert any("hidden" in error for error in errors)
-    assert any("from-tag-Action" in error for error in errors)
+    assert any("uc-DYNA" in error for error in errors)
     assert any("missing" in error for error in errors)
     hidden = next(item for item in document.live_collections() if item.collection_id == "hidden")
     assert hidden.added == (999,)
+    dynamic = next(item for item in document.live_collections() if item.collection_id == "uc-DYNA")
+    assert dynamic.added == (42,)
+
+
+def test_adds_to_from_tag_when_requested(tmp_path):
+    account = _account(tmp_path / "Steam")
+    seed_cloud_storage(account)
+    document = load_collections(account)
+    errors = document.apply_assignment(
+        CollectionAssignment(existing_ids=("from-tag-Action",)),
+        [1],
+        now=10,
+    )
+    assert errors == []
+    tag = next(
+        item for item in document.live_collections() if item.collection_id == "from-tag-Action"
+    )
+    assert 7 in tag.added
+    assert 1 in tag.added
 
 
 def test_scalar_added_or_removed_is_skipped_without_crashing(tmp_path):

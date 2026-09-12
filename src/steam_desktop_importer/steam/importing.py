@@ -100,6 +100,20 @@ def _require_present(app: DesktopApplication) -> None:
         raise ImportPlanningError(f"{app.desktop_id}: {error}") from error
 
 
+def _foreign_mapping_owner(
+    store: StateStore,
+    installation_key: str,
+    account_id32: int,
+    appid: int,
+    desktop_id: str,
+) -> str | None:
+    """Another desktop ID already persisted to ``appid``, or ``None``."""
+    for mapping in store.list_mappings(installation_key, account_id32):
+        if mapping.steam_appid_unsigned == appid and mapping.desktop_id != desktop_id:
+            return mapping.desktop_id
+    return None
+
+
 def _apply_one(
     app: DesktopApplication,
     document: ShortcutDocument,
@@ -164,7 +178,15 @@ def _apply_one(
             )
             action = "updated"
         else:
-            if appid in occupied:
+            owner = _foreign_mapping_owner(
+                store, installation_key, account_id32, appid, app.desktop_id
+            )
+            if owner is not None:
+                raise ImportPlanningError(
+                    f"{app.desktop_id}: persisted AppID {appid} is occupied by "
+                    f"{owner}; refusing to duplicate it"
+                )
+            if appid in document.occupied_appids():
                 raise ImportPlanningError(
                     f"{app.desktop_id}: persisted AppID {appid} is occupied by "
                     "another shortcut; refusing to duplicate it"

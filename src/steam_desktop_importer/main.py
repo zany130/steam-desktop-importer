@@ -63,6 +63,7 @@ from .steam import (
     shortcuts_vdf_path,
     uint32_to_int32,
 )
+from .steam.collections import is_tag_collection_id
 from .steam.snapshot import compare_snapshots, snapshot_from_json, snapshot_library
 
 
@@ -512,7 +513,14 @@ def _print_collections(args: argparse.Namespace) -> int:
     print(f"live collections    {len(live)}")
     print(f"assignable          {len(assignable)}")
     for collection in live:
-        flag = "assignable" if collection.assignable else "skipped"
+        if collection.dynamic:
+            flag = "dynamic"
+        elif not collection.assignable:
+            flag = "skipped"
+        elif is_tag_collection_id(collection.collection_id):
+            flag = "tag"
+        else:
+            flag = "assignable"
         print(
             f"  {collection.collection_id:40} {flag:10} "
             f"added={len(collection.added):<5} {collection.name}"
@@ -639,6 +647,28 @@ def _print_sgdb_search(args: argparse.Namespace) -> int:
     return 0
 
 
+def _sgdb_filters(args: argparse.Namespace):
+    from .steamgriddb import ArtworkFilters
+
+    def parts(values: list[str] | None) -> tuple[str, ...]:
+        if not values:
+            return ()
+        out: list[str] = []
+        for item in values:
+            out.extend(token.strip() for token in item.split(",") if token.strip())
+        return tuple(out)
+
+    types = parts(getattr(args, "types", None)) or ("static",)
+    return ArtworkFilters(
+        nsfw=getattr(args, "nsfw", "false"),
+        humor=getattr(args, "humor", "false"),
+        epilepsy=getattr(args, "epilepsy", "false"),
+        types=types,
+        styles=parts(getattr(args, "styles", None)),
+        mimes=parts(getattr(args, "mimes", None)),
+    )
+
+
 def _print_sgdb_assets(args: argparse.Namespace) -> int:
     from .steamgriddb import SteamGridDBError
 
@@ -646,13 +676,16 @@ def _print_sgdb_assets(args: argparse.Namespace) -> int:
     if client is None:
         return 2
     kind = args.sgdb_command
+    filters = _sgdb_filters(args)
     fetchers = {
         "grids": lambda: client.get_grids(
-            args.game_id, dimensions=getattr(args, "dimensions", None) or None
+            args.game_id,
+            dimensions=getattr(args, "dimensions", None) or None,
+            filters=filters,
         ),
-        "heroes": lambda: client.get_heroes(args.game_id),
-        "logos": lambda: client.get_logos(args.game_id),
-        "icons": lambda: client.get_icons(args.game_id),
+        "heroes": lambda: client.get_heroes(args.game_id, filters=filters),
+        "logos": lambda: client.get_logos(args.game_id, filters=filters),
+        "icons": lambda: client.get_icons(args.game_id, filters=filters),
     }
     try:
         assets = fetchers[kind]()
@@ -666,7 +699,17 @@ def _print_sgdb_assets(args: argparse.Namespace) -> int:
         return 0
     for asset in assets:
         size = f"{asset.width}x{asset.height}" if asset.width and asset.height else "-"
-        print(f"{asset.id:>8}  {asset.style or '-':<12} {size:<12} {asset.url}")
+        flags: list[str] = []
+        if asset.animated:
+            flags.append("animated")
+        if asset.nsfw:
+            flags.append("nsfw")
+        if asset.humor:
+            flags.append("joke")
+        if asset.epilepsy:
+            flags.append("epilepsy")
+        tag = ",".join(flags) if flags else "-"
+        print(f"{asset.id:>8}  {asset.style or '-':<12} {size:<12} {tag:<16} {asset.url}")
     return 0
 
 
@@ -790,6 +833,38 @@ def build_parser() -> argparse.ArgumentParser:
                 action="append",
                 help="repeatable, e.g. --dimensions 600x900",
             )
+            listing.add_argument(
+                "--styles",
+                action="append",
+                help="grid styles, e.g. --styles alternate (repeatable or comma-separated)",
+            )
+        listing.add_argument(
+            "--types",
+            action="append",
+            help="static and/or animated (default: static)",
+        )
+        listing.add_argument(
+            "--nsfw",
+            choices=("false", "true", "any"),
+            default="false",
+            help="false excludes NSFW, true is NSFW-only, any includes both",
+        )
+        listing.add_argument(
+            "--humor",
+            choices=("false", "true", "any"),
+            default="false",
+            help="joke artwork (SteamGridDB humor tag)",
+        )
+        listing.add_argument(
+            "--epilepsy",
+            choices=("false", "true", "any"),
+            default="false",
+        )
+        listing.add_argument(
+            "--mimes",
+            action="append",
+            help="image mime types, e.g. --mimes image/png",
+        )
         listing.set_defaults(func=_print_sgdb_assets)
 
     return parser
