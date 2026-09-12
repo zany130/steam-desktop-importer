@@ -918,3 +918,21 @@ def test_overriding_steam_detection_allows_import_when_probe_says_running(
     vdf = shortcuts_vdf_path(account)
     assert ShortcutDocument.load(vdf).find_by_appid(first_import_candidate(app.desktop_id))
     window.close()
+
+
+def test_flatpak_banner_starts_async_permission_probe(qapp):
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    calls: list[str] = []
+    window._selected_installation = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam"),
+        userdata_root=Path("/tmp/steam/userdata"),
+        display_name="Flatpak Steam",
+    )
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window._host_launch_permission = None
+    window._update_banner()
+    assert calls == ["probe"]
+    assert "Checking Flatpak host-launch permission" in window.banner.text()
+    window.close()

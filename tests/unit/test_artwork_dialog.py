@@ -5,15 +5,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import QSize
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtWidgets import QApplication, QLineEdit, QMessageBox
 
+from steam_desktop_importer.steamgriddb.apng import ApngAnimation, ApngFrame
 from steam_desktop_importer.steamgriddb.models import GameResult, GridAsset
 from steam_desktop_importer.ui.artwork_dialog import (
     ACTION_SKIP,
     ACTION_SKIP_REMAINING,
     ACTION_USE,
     ArtworkDialog,
+    _compose_apng,
 )
 
 from .test_gui_window import _gui_app
@@ -254,7 +257,7 @@ def test_asset_load_failure_clears_previous_assets(qapp, tmp_path):
     dialog.close()
 
 
-def test_partial_download_failure_keeps_successful_slots(qapp, tmp_path):
+def test_partial_download_failure_keeps_successful_slots(qapp, tmp_path, monkeypatch):
     png = bytes.fromhex(
         "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
         "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
@@ -273,12 +276,19 @@ def test_partial_download_failure_keeps_successful_slots(qapp, tmp_path):
         inline_workers=True,
         client_factory=lambda: PartialFailClient(png),
     )
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *_args: warnings.append(_args[-1]) or QMessageBox.StandardButton.Ok,
+    )
     dialog._on_search()
     dialog.use_first_button.click()
     choice = dialog.choice()
     assert choice.action == ACTION_USE
     assert "portrait" in choice.files
     assert "icon" not in choice.files
+    assert warnings == ["Icon: icon failed"]
     dialog.close()
 
 
@@ -493,3 +503,51 @@ def test_artwork_dialog_keeps_all_grid_results(qapp, tmp_path):
     dialog._on_search()
     assert dialog._lists["portrait"].count() == 30
     dialog.close()
+
+
+def test_artwork_dialog_caps_grid_results_per_slot(qapp, tmp_path):
+    class ManyGrids(FakeClient):
+        def get_grids(self, game_id: int, dimensions=None, **kwargs):
+            self.grid_filters.append(kwargs.get("filters"))
+            return [
+                GridAsset(
+                    id=index,
+                    kind="grid",
+                    url=f"https://cdn.example/{index}.png",
+                    width=600,
+                    height=900,
+                )
+                for index in range(250)
+            ]
+
+        def get_icons(self, game_id: int, **kwargs):
+            return []
+
+    app = _gui_app(tmp_path / "org.example.App.desktop")
+    dialog = ArtworkDialog(
+        app,
+        tmp_path,
+        inline_workers=True,
+        client_factory=lambda: ManyGrids(b""),
+    )
+    dialog._on_search()
+    assert dialog._lists["portrait"].count() == 200
+    dialog.close()
+
+
+def test_apng_preview_rejects_large_canvas():
+    frame = ApngFrame(
+        png_bytes=bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+        ),
+        x=0,
+        y=0,
+        width=1,
+        height=1,
+        delay_ms=100,
+        dispose_op=0,
+        blend_op=0,
+    )
+    animation = ApngAnimation(width=4000, height=4000, plays=0, frames=(frame, frame))
+    assert _compose_apng(animation, QSize(200, 200)) is None

@@ -43,7 +43,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..desktop.discovery import DiscoveryResult
-from ..launch import MANUAL_OVERRIDE_COMMAND, probe_host_launch_permission
+from ..launch import (
+    HostLaunchPermission,
+    MANUAL_OVERRIDE_COMMAND,
+    probe_host_launch_permission,
+)
 from ..models import SOURCE_KINDS, DesktopApplication, SteamAccount, SteamInstallation, UnsupportedCode
 from ..state import (
     DEFAULT_STEAM_POLL_MS,
@@ -147,6 +151,8 @@ class MainWindow(QMainWindow):
         self._assignable_collection_names: set[str] = set()
         self._unassignable_collection_names: dict[str, str] = {}
         self._running: SteamRunningStatus | None = None
+        self._host_launch_permission: HostLaunchPermission | None = None
+        self._host_launch_probe_busy = False
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
         self._scan_busy = False
@@ -679,8 +685,11 @@ class MainWindow(QMainWindow):
                     "this release; sandbox permissions are never changed "
                     "automatically."
                 )
-                permission = probe_host_launch_permission()
-                if not permission.granted:
+                permission = self._host_launch_permission
+                if permission is None:
+                    messages.append("Checking Flatpak host-launch permission…")
+                    self._probe_host_launch_permission()
+                elif not permission.granted:
                     messages.append(
                         f"{permission.evidence} If you choose to grant it "
                         f"yourself: {MANUAL_OVERRIDE_COMMAND}"
@@ -718,6 +727,34 @@ class MainWindow(QMainWindow):
             )
         self.banner.setVisible(bool(messages))
         self.banner.setText(" ".join(messages))
+
+    def _probe_host_launch_permission(self) -> None:
+        if self._host_launch_probe_busy:
+            return
+        self._host_launch_probe_busy = True
+        worker = CallableWorker(probe_host_launch_permission)
+        worker.signals.finished.connect(self._on_host_launch_permission)
+        worker.signals.failed.connect(self._on_host_launch_permission_failed)
+        self._pool.start(worker)
+
+    def _on_host_launch_permission(self, result: object) -> None:
+        self._host_launch_probe_busy = False
+        if isinstance(result, HostLaunchPermission):
+            self._host_launch_permission = result
+        self._update_banner()
+
+    def _on_host_launch_permission_failed(self, _message: str) -> None:
+        self._host_launch_probe_busy = False
+        if self._host_launch_permission is None:
+            self._host_launch_permission = HostLaunchPermission(
+                granted=False,
+                evidence=(
+                    "could not read Flatpak Steam permissions; host launching is "
+                    "experimental and may fail until org.freedesktop.Flatpak is "
+                    "granted manually"
+                ),
+            )
+        self._update_banner()
 
     # -- table actions --------------------------------------------------
 

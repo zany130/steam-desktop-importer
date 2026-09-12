@@ -303,14 +303,14 @@ class SteamGridDBClient:
         placed file is the PNG thumb Steam can actually use. ``preview=True``
         skips WebM thumbs and fetches a still/animated image instead.
         """
-        from .download import DOWNLOAD_READ_TIMEOUT, download_url
+        from .download import download_url
 
         url = preview_download_url(asset) if preview else asset_download_url(asset)
         return download_url(
             url,
             temp_path,
             session=self.session,
-            timeout=(self.connect_timeout, max(self.read_timeout, DOWNLOAD_READ_TIMEOUT)),
+            timeout=(self.connect_timeout, self.read_timeout),
             max_bytes=max_bytes,
         )
 

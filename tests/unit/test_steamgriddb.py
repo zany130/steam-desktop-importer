@@ -56,6 +56,7 @@ class FakeResponse:
             self.content = b""
         self.headers = headers or {}
         self.url = url
+        self.closed = False
 
     def json(self):
         if self._json is None:
@@ -63,6 +64,7 @@ class FakeResponse:
         return self._json
 
     def close(self) -> None:
+        self.closed = True
         return None
 
     def iter_content(self, chunk_size: int = 1):
@@ -445,21 +447,19 @@ def test_download_limit_allows_large_animated_heroes():
 
 
 def test_download_rejects_declared_length_over_limit(tmp_path):
-    session = ScriptedSession(
-        [
-            FakeResponse(
-                200,
-                json_body=None,
-                content=PNG_1X1,
-                headers={"Content-Length": str(200 * 1024 * 1024)},
-                url="https://cdn.example/huge.png",
-            )
-        ]
+    response = FakeResponse(
+        200,
+        json_body=None,
+        content=PNG_1X1,
+        headers={"Content-Length": str(200 * 1024 * 1024)},
+        url="https://cdn.example/huge.png",
     )
+    session = ScriptedSession([response])
     dest = tmp_path / "art.png"
     with pytest.raises(InvalidResponseError, match="limit 100 MB"):
         download_url("https://cdn.example/huge.png", dest, session=session)
     assert not dest.exists()
+    assert response.closed is True
 
 
 def test_download_aborts_when_body_exceeds_limit(tmp_path):
@@ -494,6 +494,31 @@ def test_ico_assets_download_the_png_thumb(tmp_path):
     assert not session.calls[-1][1].endswith(".ico")
 
 
+def test_grid_asset_positional_layout_keeps_lock_and_author_name():
+    asset = GridAsset(
+        1,
+        "grid",
+        "https://cdn.example/grid.png",
+        "",
+        "",
+        0,
+        None,
+        None,
+        "",
+        (),
+        "",
+        "",
+        False,
+        False,
+        False,
+        True,
+        "alice",
+    )
+    assert asset.lock is True
+    assert asset.author_name == "alice"
+    assert asset.animated is False
+
+
 def test_png_icons_still_download_the_full_url():
     asset = GridAsset(
         id=1,
@@ -525,6 +550,34 @@ def test_preview_download_skips_webm_thumbs(tmp_path):
     client.download_asset(asset, dest, preview=True)
     assert dest.read_bytes() == PNG_1X1
     assert session.calls[-1][1] == asset.url
+
+
+def test_download_asset_uses_client_read_timeout(tmp_path):
+    asset = GridAsset(
+        id=2,
+        kind="grid",
+        url="https://cdn.example/grid.png",
+    )
+
+    class TimeoutSession(ScriptedSession):
+        def __init__(self):
+            super().__init__([FakeResponse(200, json_body=None, content=PNG_1X1, url=asset.url)])
+            self.send_timeout = None
+
+        def send(self, prepared, **kwargs):
+            self.send_timeout = kwargs.get("timeout")
+            return super().send(prepared, **kwargs)
+
+    session = TimeoutSession()
+    client = SteamGridDBClient(
+        "test-secret-key",
+        session=session,
+        read_timeout=7.5,
+        sleeper=lambda _delay: None,
+    )
+    dest = tmp_path / "grid.png"
+    client.download_asset(asset, dest)
+    assert session.send_timeout == (5.0, 7.5)
 
 
 def test_download_accepts_webp_with_png_name(tmp_path):

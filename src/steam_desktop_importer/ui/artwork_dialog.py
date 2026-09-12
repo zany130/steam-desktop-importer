@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QTabWidget,
     QVBoxLayout,
@@ -66,6 +67,10 @@ _TAB_LABELS = {
     SLOT_ICON: "Icon",
 }
 
+_MAX_RESULTS_PER_SLOT = 200
+_MAX_PREVIEW_PIXELS = 4_000_000
+_MAX_PREVIEW_FRAMES = 120
+
 
 @dataclass
 class ArtworkChoice:
@@ -73,6 +78,12 @@ class ArtworkChoice:
 
     action: str = ACTION_SKIP
     files: dict[str, Path] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _DownloadResult:
+    files: dict[str, Path]
+    errors: tuple[str, ...] = ()
 
 
 def _display_name(app: DesktopApplication) -> str:
@@ -101,6 +112,12 @@ def _asset_label(asset: GridAsset) -> str:
 
 def _compose_apng(animation, box) -> tuple[list[QPixmap], list[int]] | None:
     """Rasterise APNG frames onto a canvas and scale them for the preview label."""
+    if animation.width <= 0 or animation.height <= 0:
+        return None
+    if animation.width * animation.height > _MAX_PREVIEW_PIXELS:
+        return None
+    if len(animation.frames) < 2 or len(animation.frames) > _MAX_PREVIEW_FRAMES:
+        return None
     canvas = QImage(animation.width, animation.height, QImage.Format.Format_ARGB32)
     canvas.fill(Qt.GlobalColor.transparent)
     pixmaps: list[QPixmap] = []
@@ -140,8 +157,6 @@ def _compose_apng(animation, box) -> tuple[list[QPixmap], list[int]] | None:
             painter.end()
         elif frame.dispose_op == 2 and before is not None:
             canvas = before
-    if len(pixmaps) < 2:
-        return None
     return pixmaps, delays
 
 
@@ -153,10 +168,11 @@ def _group_assets(
     grouped: dict[str, list[GridAsset]] = {slot: [] for slot in SLOTS}
     for asset in client.get_grids(game_id, filters=filters):
         slot = slot_for_grid(width=asset.width, height=asset.height)
-        grouped[slot].append(asset)
-    grouped[SLOT_HERO] = list(client.get_heroes(game_id, filters=filters))
-    grouped[SLOT_LOGO] = list(client.get_logos(game_id, filters=filters))
-    grouped[SLOT_ICON] = list(client.get_icons(game_id, filters=filters))
+        if len(grouped[slot]) < _MAX_RESULTS_PER_SLOT:
+            grouped[slot].append(asset)
+    grouped[SLOT_HERO] = list(client.get_heroes(game_id, filters=filters))[:_MAX_RESULTS_PER_SLOT]
+    grouped[SLOT_LOGO] = list(client.get_logos(game_id, filters=filters))[:_MAX_RESULTS_PER_SLOT]
+    grouped[SLOT_ICON] = list(client.get_icons(game_id, filters=filters))[:_MAX_RESULTS_PER_SLOT]
     return grouped
 
 
@@ -393,9 +409,9 @@ class ArtworkDialog(QDialog):
             return
         self._clear_assets()
         self._set_busy(True, f"Loading artwork for {game.name}…")
+        filters = self.filter_bar.filters()
 
         def work() -> dict[str, list[GridAsset]]:
-            filters = self.filter_bar.filters()
             return self._with_client(
                 lambda client: _group_assets(client, game.id, filters)
             )
@@ -616,8 +632,8 @@ class ArtworkDialog(QDialog):
             slot: list(self._assets.get(slot) or []) for slot in chosen
         }
 
-        def work() -> dict[str, Path]:
-            def download(client: SteamGridDBClient) -> dict[str, Path]:
+        def work() -> _DownloadResult:
+            def download(client: SteamGridDBClient) -> _DownloadResult:
                 files: dict[str, Path] = {}
                 errors: list[str] = []
                 for slot, asset in chosen.items():
@@ -642,7 +658,7 @@ class ArtworkDialog(QDialog):
                     raise RuntimeError(
                         errors[0] if errors else "Nothing could be downloaded."
                     )
-                return files
+                return _DownloadResult(files=files, errors=tuple(errors))
 
             return self._with_client(download)
 
@@ -650,10 +666,19 @@ class ArtworkDialog(QDialog):
 
     def _on_download_done(self, files: object) -> None:
         self._set_busy(False)
-        if not isinstance(files, Mapping) or not files:
+        result = files
+        if isinstance(files, Mapping):
+            result = _DownloadResult(files=dict(files))
+        if not isinstance(result, _DownloadResult) or not result.files:
             self.status.setText("Nothing could be downloaded.")
             return
-        self._choice = ArtworkChoice(action=ACTION_USE, files=dict(files))
+        if result.errors:
+            QMessageBox.warning(
+                self,
+                "Some artwork could not be downloaded",
+                "\n".join(result.errors),
+            )
+        self._choice = ArtworkChoice(action=ACTION_USE, files=dict(result.files))
         self.accept()
 
     def _skip(self) -> None:

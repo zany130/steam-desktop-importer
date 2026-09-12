@@ -15,7 +15,7 @@ import shutil
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, TimeoutExpired
 
 from .adapters import LaunchVector
 
@@ -134,7 +134,7 @@ def _flatpak_output(run: _Run, args: Sequence[str]) -> str | None:
             timeout=8,
             check=False,
         )
-    except (FileNotFoundError, OSError, TimeoutError):
+    except (FileNotFoundError, OSError, TimeoutExpired):
         return None
     stdout = getattr(completed, "stdout", "") or ""
     if getattr(completed, "returncode", 1) != 0 and not stdout.strip():
@@ -154,6 +154,6 @@ def _session_bus_allows_portal(text: str) -> bool:
         name, _, value = line.partition("=")
         policy = value.strip().split(";")[0].strip().lower()
         key = name.strip()
-        if key in {FLATPAK_PORTAL_INTERFACE, "*"} and policy in {"talk", "own"}:
+        if key in {FLATPAK_PORTAL_INTERFACE, "*"} and policy == "talk":
             return True
     return False

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from subprocess import CompletedProcess
+from subprocess import CompletedProcess, TimeoutExpired
 
 from steam_desktop_importer.desktop.parser import build_application, parse_desktop_entry
 from steam_desktop_importer.launch import (
@@ -94,6 +94,28 @@ def test_probe_reports_missing_permission_and_never_grants():
         assert "--talk-name" not in argv
         joined = " ".join(argv)
         assert MANUAL_OVERRIDE_COMMAND not in joined
+
+
+def test_probe_rejects_own_permission():
+    def run(argv, **kwargs):
+        return CompletedProcess(
+            argv,
+            0,
+            stdout="[Session Bus Policy]\norg.freedesktop.Flatpak=own\n",
+            stderr="",
+        )
+
+    permission = probe_host_launch_permission(run=run)
+    assert permission.granted is False
+
+
+def test_probe_treats_timeout_as_missing_probe():
+    def run(*_args, **_kwargs):
+        raise TimeoutExpired(cmd="flatpak", timeout=8)
+
+    permission = probe_host_launch_permission(run=run)
+    assert permission.granted is False
+    assert "could not read" in permission.evidence
 
 
 def test_wrap_keeps_host_flatpak_snap_and_appimage_argv(sources_dir):

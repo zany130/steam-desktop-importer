@@ -76,6 +76,7 @@ def download_url(
             )
         declared = _content_length(response.headers)
         if declared is not None and declared > limit:
+            response.close()
             raise InvalidResponseError(
                 f"artwork is {_format_size(declared)} (limit {_format_size(limit)})"
             )
