@@ -44,6 +44,9 @@ cp "$DESKTOP" "$APPDIR/usr/share/applications/steam-desktop-importer.desktop"
 cp "$DESKTOP" "$APPDIR/steam-desktop-importer.desktop"
 cp "$ICON" "$APPDIR/usr/share/icons/hicolor/scalable/apps/steam-desktop-importer.svg"
 cp "$ICON" "$APPDIR/steam-desktop-importer.svg"
+mkdir -p "$APPDIR/usr/share/doc/steam-desktop-importer"
+cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/steam-desktop-importer/LICENSE"
+cp "$ROOT/CHANGELOG.md" "$APPDIR/usr/share/doc/steam-desktop-importer/CHANGELOG.md"
 
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/bin/sh

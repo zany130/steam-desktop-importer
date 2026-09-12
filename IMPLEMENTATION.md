@@ -67,53 +67,34 @@ implemented by writing `shortcuts.vdf` `tags`.
 
 ## 3. Project Structure
 
+Implemented layout (names that differ from the original sketch are called
+out):
+
 ```text
 steam-desktop-importer/
 ├── pyproject.toml
 ├── README.md
-├── src/
-│   └── steam_desktop_importer/
-│       ├── __init__.py
-│       ├── main.py
-│       ├── config.py
-│       ├── models.py
-│       ├── desktop/
-│       │   ├── __init__.py
-│       │   ├── discovery.py
-│       │   ├── parser.py
-│       │   ├── exec_parser.py
-│       │   └── icons.py
-│       ├── steam/
-│       │   ├── __init__.py
-│       │   ├── installations.py
-│       │   ├── accounts.py
-│       │   ├── process.py
-│       │   ├── appid.py
-│       │   ├── shortcuts.py
-│       │   ├── artwork.py
-│       │   └── launch_adapters.py
-│       ├── sgdb/
-│       │   ├── __init__.py
-│       │   └── client.py
-│       ├── state/
-│       │   ├── __init__.py
-│       │   └── store.py
-│       └── ui/
-│           ├── __init__.py
-│           ├── main_window.py
-│           ├── account_dialog.py
-│           ├── settings_dialog.py
-│           └── artwork_dialog.py
+├── LICENSE
+├── src/steam_desktop_importer/
+│   ├── __init__.py
+│   ├── __main__.py
+│   ├── main.py
+│   ├── models.py
+│   ├── desktop/          # discovery, parser, exec_parser, icons
+│   ├── launch/           # adapters + Flatpak Steam wrap (not steam/launch_adapters.py)
+│   ├── steam/            # installations, accounts, running (not process.py),
+│   │                     # appid, shortcuts, artwork, collections, commits
+│   ├── steamgriddb/      # not sgdb/
+│   ├── state/
+│   └── ui/
+├── packaging/linux/      # AppImage desktop file, icon, PyInstaller spec
+├── scripts/
 └── tests/
     ├── fixtures/
-    │   ├── desktop_entries/
-    │   ├── shortcuts_vdf/
-    │   └── steam_config/
-    ├── unit/
-    └── integration/
+    └── unit/
 ```
 
-Use `__init__.py`, not `init.py`.
+There is no `config.py`. Use `__init__.py`, not `init.py`.
 
 ---
 

@@ -19,9 +19,10 @@ and write selected images into the account's `config/grid/` directory after
 the VDF commit. Without a key, import is shortcut-only. Artwork filters match
 Steam ROM Manager: static by default; NSFW, joke, epilepsy, and animated are
 opt-in. Checked collections (or a typed new name) are written afterwards into
-Steam's cloud-storage JSON; they are never invented by default. Flatpak Steam
-imports wrap host commands with `flatpak-spawn --host` and never grant sandbox
-permissions.
+Steam's cloud-storage JSON; they are never invented by default. Store-tag
+collections are labelled `(tag collection)`. Hidden and Dynamic Collections
+are omitted. Flatpak Steam imports wrap host commands with
+`flatpak-spawn --host` and never grant sandbox permissions.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
@@ -42,6 +43,26 @@ permissions.
 
 See `CHECKLIST.md` for per-requirement status, deviations, and the remaining
 open issues.
+
+## Install
+
+**AppImage (v1.0.0 distribution).** Build a host image (does not write Steam):
+
+```bash
+./scripts/build_appimage.sh
+```
+
+The file is `dist/Steam_Desktop_Importer-1.0.0-<arch>.AppImage`. Mark it
+executable and run it. It is a normal host binary with host filesystem access
+and still refuses Steam writes while Steam is running.
+
+**From source:**
+
+```bash
+uv venv --python 3.12
+uv sync --dev
+.venv/bin/steam-desktop-importer
+```
 
 ## What works today
 
@@ -88,13 +109,14 @@ steam-desktop-importer debug steamgriddb grids 2254 --dimensions 600x900
 steam-desktop-importer debug steamgriddb grids 2254 --nsfw any --humor any --types static,animated
 ```
 
-On the development host `debug scan` resolves 804 entries with 0 parse errors,
-4 masked by `Hidden=true`, 9 shadowed lower-priority copies, and 32 entries
-whose `Exec=` uses non-standard single-quote quoting. Two entries are held
-back from import, leaving 777 importable: one desktop ID collision and one
-`Exec=` whose shell quote-escaping we cannot parse correctly.
+On the characterization host used for Phase 0–10 (see
+`docs/TEST_ENVIRONMENT.md`), `debug scan` resolved 804 entries with 0 parse
+errors, 4 masked by `Hidden=true`, 9 shadowed lower-priority copies, and 32
+entries whose `Exec=` uses non-standard single-quote quoting. Two entries
+were held back from import, leaving 777 importable: one desktop ID collision
+and one `Exec=` whose shell quote-escaping we cannot parse correctly.
 
-All 777 produce a launch vector — 503 native, 237 Flatpak, 37 AppImage — with
+All 777 produced a launch vector — 503 native, 237 Flatpak, 37 AppImage — with
 no warnings and no leftover Flatpak file-forwarding markers. For example
 `us.zoom.Zoom` becomes:
 
@@ -138,16 +160,7 @@ uv pip install -e '.[dev]'
 ```
 
 Phases 0–1 only need `vdf`, `pyxdg` and `pytest`. The GUI needs `PySide6`.
-
-Build a host AppImage (does not write Steam):
-
-```bash
-./scripts/build_appimage.sh
-```
-
-The image lands in `dist/Steam_Desktop_Importer-<version>-<arch>.AppImage`.
-It is a normal host binary with host filesystem access. It still refuses to
-write Steam userdata while Steam is running.
+The declared runtime set in `pyproject.toml` covers the whole application.
 
 Regenerate the binary VDF fixtures (they are committed, so this is only needed
 if the generator changes):
@@ -162,7 +175,10 @@ python scripts/build_vdf_fixtures.py
 | --- | --- |
 | `IMPLEMENTATION.md` | The authoritative specification |
 | `CHECKLIST.md` | Requirement-by-requirement status, deviations, open issues |
+| `CHANGELOG.md` | Release notes |
 | `docs/PHASE0_FORMAT_CHARACTERIZATION.md` | What was actually observed on a real Steam install |
+| `docs/PHASE10_NATIVE_RELEASE_GATE.md` | Native Steam Konsole gate |
+| `docs/PHASE12_COLLECTIONS.md` | Observed Steam collection JSON |
 | `docs/TEST_ENVIRONMENT.md` | The documented native Steam test environment |
 | `tests/fixtures/desktop_entries/README.md` | Fixture index and Phase 1 coverage mapping |
 | `tests/fixtures/steam_config/README.md` | Steam account fixture index |
@@ -201,7 +217,8 @@ These come from `IMPLEMENTATION.md` §35 and are honoured by the current code:
   hints" rather than an error.
 - Steam collections are written to cloud-storage JSON while Steam is closed,
   never by stuffing names into `shortcuts.vdf` `tags`. Nothing is added
-  unless you check a collection or type a new name.
+  unless you check a collection or type a new name. Hidden and Dynamic
+  Collections are not assignable; store-tag collections are.
 - `shortcuts.vdf`, `config/grid/`, and collection JSON are never written
   while Steam is running. Artwork hot reload is out of scope.
 - Flatpak Steam sandbox permissions are never modified.

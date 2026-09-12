@@ -9,6 +9,18 @@ description = "Import FreeDesktop .desktop applications into Steam as non-Steam 
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
+authors = [{ name = "Andres Ortiz", email = "andresdortiz@gmail.com" }]
+keywords = ["steam", "desktop", "linux", "freedesktop", "steamgriddb"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Environment :: X11 Applications :: Qt",
+    "Topic :: Games/Entertainment",
+]
 
 # Runtime dependencies per IMPLEMENTATION.md section 4.
 # Phases 0-1 only need pyxdg; the rest are declared up front so the tested
@@ -20,6 +32,11 @@ dependencies = [
     "psutil>=5.9",
     "pyxdg>=0.28",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zany130/steam-desktop-importer"
+Issues = "https://github.com/zany130/steam-desktop-importer/issues"
+Changelog = "https://github.com/zany130/steam-desktop-importer/blob/main/CHANGELOG.md"
 
 [project.scripts]
 steam-desktop-importer = "steam_desktop_importer.main:main"
