@@ -156,6 +156,7 @@ class MainWindow(QMainWindow):
         self._host_launch_probe_key: str | None = None
         self._host_launch_probe_generation = 0
         self._host_launch_probe_started_generation = -1
+        self._host_launch_probe_worker: CallableWorker | None = None
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
         self._scan_busy = False
@@ -747,6 +748,7 @@ class MainWindow(QMainWindow):
         self._host_launch_probe_key = installation.key
         self._host_launch_probe_started_generation = self._host_launch_probe_generation
         worker = CallableWorker(probe_host_launch_permission)
+        self._host_launch_probe_worker = worker
         worker.signals.finished.connect(self._on_host_launch_permission)
         worker.signals.failed.connect(self._on_host_launch_permission_failed)
         self._pool.start(worker)
@@ -757,6 +759,7 @@ class MainWindow(QMainWindow):
         self._host_launch_probe_busy = False
         self._host_launch_probe_key = None
         self._host_launch_probe_started_generation = -1
+        self._host_launch_probe_worker = None
         current_key = self._selected_installation.key if self._selected_installation else None
         if (
             probe_key != current_key
@@ -775,6 +778,7 @@ class MainWindow(QMainWindow):
         self._host_launch_probe_busy = False
         self._host_launch_probe_key = None
         self._host_launch_probe_started_generation = -1
+        self._host_launch_probe_worker = None
         current_key = self._selected_installation.key if self._selected_installation else None
         if (
             probe_key != current_key
