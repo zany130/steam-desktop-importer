@@ -964,3 +964,57 @@ def test_switching_installations_clears_cached_flatpak_permission(qapp):
     window._on_install_chosen()
     assert window._host_launch_permission is None
     window.close()
+
+
+def test_outdated_flatpak_probe_result_is_ignored(qapp):
+    from steam_desktop_importer.launch import HostLaunchPermission
+
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    first = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    second = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-b"),
+        userdata_root=Path("/tmp/steam-b/userdata"),
+        display_name="Flatpak Steam B",
+    )
+    calls: list[str] = []
+    window._selected_installation = second
+    window._host_launch_probe_key = first.key
+    window._host_launch_probe_busy = True
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window._on_host_launch_permission(HostLaunchPermission(True, "stale"))
+    assert window._host_launch_permission is None
+    assert calls == ["probe"]
+    window.close()
+
+
+def test_outdated_flatpak_probe_failure_is_ignored(qapp):
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    first = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    second = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-b"),
+        userdata_root=Path("/tmp/steam-b/userdata"),
+        display_name="Flatpak Steam B",
+    )
+    calls: list[str] = []
+    window._selected_installation = second
+    window._host_launch_probe_key = first.key
+    window._host_launch_probe_busy = True
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window._on_host_launch_permission_failed("boom")
+    assert window._host_launch_permission is None
+    assert calls == ["probe"]
+    window.close()

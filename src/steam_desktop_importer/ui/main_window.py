@@ -153,6 +153,7 @@ class MainWindow(QMainWindow):
         self._running: SteamRunningStatus | None = None
         self._host_launch_permission: HostLaunchPermission | None = None
         self._host_launch_probe_busy = False
+        self._host_launch_probe_key: str | None = None
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
         self._scan_busy = False
@@ -732,22 +733,41 @@ class MainWindow(QMainWindow):
         self.banner.setText(" ".join(messages))
 
     def _probe_host_launch_permission(self) -> None:
-        if self._host_launch_probe_busy:
+        installation = self._selected_installation
+        if (
+            self._host_launch_probe_busy
+            or installation is None
+            or not installation.is_experimental
+            or not self._store.flatpak_steam_host_launch()
+        ):
             return
         self._host_launch_probe_busy = True
+        self._host_launch_probe_key = installation.key
         worker = CallableWorker(probe_host_launch_permission)
         worker.signals.finished.connect(self._on_host_launch_permission)
         worker.signals.failed.connect(self._on_host_launch_permission_failed)
         self._pool.start(worker)
 
     def _on_host_launch_permission(self, result: object) -> None:
+        probe_key = self._host_launch_probe_key
         self._host_launch_probe_busy = False
+        self._host_launch_probe_key = None
+        current_key = self._selected_installation.key if self._selected_installation else None
+        if probe_key != current_key:
+            self._update_banner()
+            return
         if isinstance(result, HostLaunchPermission):
             self._host_launch_permission = result
         self._update_banner()
 
     def _on_host_launch_permission_failed(self, _message: str) -> None:
+        probe_key = self._host_launch_probe_key
         self._host_launch_probe_busy = False
+        self._host_launch_probe_key = None
+        current_key = self._selected_installation.key if self._selected_installation else None
+        if probe_key != current_key:
+            self._update_banner()
+            return
         if self._host_launch_permission is None:
             self._host_launch_permission = HostLaunchPermission(
                 granted=False,
