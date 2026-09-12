@@ -60,7 +60,7 @@ and still refuses Steam writes while Steam is running.
 
 ```bash
 uv venv --python 3.12
-uv pip install -e '.[dev]'
+uv sync --dev
 .venv/bin/steam-desktop-importer
 ```
 
