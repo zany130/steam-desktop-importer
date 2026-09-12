@@ -1444,9 +1444,12 @@ def run_app() -> int:
     """Create a QApplication and show the main window."""
     from PySide6.QtWidgets import QApplication
 
+    from .. import __version__
+
     existing = QApplication.instance()
     app = existing if existing is not None else QApplication([])
     app.setApplicationName("Steam Desktop Importer")
+    app.setApplicationVersion(__version__)
     window = MainWindow()
     window.show()
     if existing is not None:

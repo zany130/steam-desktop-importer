@@ -6,7 +6,7 @@ Tracks IMPLEMENTATION.md compliance. Updated as phases land.
 launching is experimental and fixture-tested; live TEST-001 is not validated
 on this host. This importer never mutates Steam userdata while Steam is
 running. v1.0.0 is source/venv plus an AppImage.
-496 tests passing.**
+529 tests passing.**
 Live `shortcuts.vdf` writes exist only in `steam/commit.py`. SteamGridDB
 artwork is placed under a userdata `config/grid/` only through
 `steam/artwork.py`. Collection JSON is replaced only through
@@ -513,6 +513,7 @@ Packaging **this importer** as a Flatpak stays out of 1.0.0 (§2.2).
 
 - [x] Version bump to `1.0.0`
 - [x] AppImage build recipe (host filesystem, Steam-closed writes)
+- [x] MIT `LICENSE` and `CHANGELOG.md`
 - Flatpak of the importer — **not v1.0.0**
 
 ---
