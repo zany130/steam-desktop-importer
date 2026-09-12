@@ -154,6 +154,8 @@ class MainWindow(QMainWindow):
         self._host_launch_permission: HostLaunchPermission | None = None
         self._host_launch_probe_busy = False
         self._host_launch_probe_key: str | None = None
+        self._host_launch_probe_generation = 0
+        self._host_launch_probe_started_generation = -1
         self._detect_steam = detect_steam or detect_steam_running
         self._shortcuts_error: str | None = None
         self._scan_busy = False
@@ -571,7 +573,7 @@ class MainWindow(QMainWindow):
         pair = next((item for item in self._installations if item[0].key == key), None)
         self._selected_installation = pair[0] if pair else None
         if self._selected_installation is None or self._selected_installation.key != previous_key:
-            self._host_launch_permission = None
+            self._reset_host_launch_permission()
         if self._selected_installation is not None:
             self._store.remember_installation(self._selected_installation.key)
         self._fill_accounts(pair[1] if pair else None)
@@ -743,6 +745,7 @@ class MainWindow(QMainWindow):
             return
         self._host_launch_probe_busy = True
         self._host_launch_probe_key = installation.key
+        self._host_launch_probe_started_generation = self._host_launch_probe_generation
         worker = CallableWorker(probe_host_launch_permission)
         worker.signals.finished.connect(self._on_host_launch_permission)
         worker.signals.failed.connect(self._on_host_launch_permission_failed)
@@ -750,10 +753,15 @@ class MainWindow(QMainWindow):
 
     def _on_host_launch_permission(self, result: object) -> None:
         probe_key = self._host_launch_probe_key
+        probe_generation = self._host_launch_probe_started_generation
         self._host_launch_probe_busy = False
         self._host_launch_probe_key = None
+        self._host_launch_probe_started_generation = -1
         current_key = self._selected_installation.key if self._selected_installation else None
-        if probe_key != current_key:
+        if (
+            probe_key != current_key
+            or probe_generation != self._host_launch_probe_generation
+        ):
             self._update_banner()
             return
         if isinstance(result, HostLaunchPermission):
@@ -762,10 +770,15 @@ class MainWindow(QMainWindow):
 
     def _on_host_launch_permission_failed(self, _message: str) -> None:
         probe_key = self._host_launch_probe_key
+        probe_generation = self._host_launch_probe_started_generation
         self._host_launch_probe_busy = False
         self._host_launch_probe_key = None
+        self._host_launch_probe_started_generation = -1
         current_key = self._selected_installation.key if self._selected_installation else None
-        if probe_key != current_key:
+        if (
+            probe_key != current_key
+            or probe_generation != self._host_launch_probe_generation
+        ):
             self._update_banner()
             return
         if self._host_launch_permission is None:
@@ -778,6 +791,10 @@ class MainWindow(QMainWindow):
                 ),
             )
         self._update_banner()
+
+    def _reset_host_launch_permission(self) -> None:
+        self._host_launch_permission = None
+        self._host_launch_probe_generation += 1
 
     # -- table actions --------------------------------------------------
 
@@ -1406,7 +1423,7 @@ class MainWindow(QMainWindow):
             store=self._store,
             on_poll_changed=lambda: self._apply_steam_poll_settings(probe_now=True),
         ).exec()
-        self._host_launch_permission = None
+        self._reset_host_launch_permission()
         self._apply_steam_poll_settings()
         self._update_banner()
 

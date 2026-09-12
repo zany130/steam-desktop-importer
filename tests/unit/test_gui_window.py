@@ -1018,3 +1018,27 @@ def test_outdated_flatpak_probe_failure_is_ignored(qapp):
     assert window._host_launch_permission is None
     assert calls == ["probe"]
     window.close()
+
+
+def test_stale_flatpak_probe_generation_is_ignored(qapp):
+    from steam_desktop_importer.launch import HostLaunchPermission
+
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    installation = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    calls: list[str] = []
+    window._selected_installation = installation
+    window._host_launch_probe_key = installation.key
+    window._host_launch_probe_busy = True
+    window._host_launch_probe_started_generation = 0
+    window._host_launch_probe_generation = 1
+    window._probe_host_launch_permission = lambda: calls.append("probe")
+    window._on_host_launch_permission(HostLaunchPermission(True, "stale"))
+    assert window._host_launch_permission is None
+    assert calls == ["probe"]
+    window.close()
