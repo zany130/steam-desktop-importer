@@ -338,7 +338,7 @@ class SteamGridDBClient:
         """Follow SteamGridDB ``page`` / ``total`` until the listing is complete."""
         assets: list[GridAsset] = []
         seen: set[int] = set()
-        for page in range(_LIST_PAGE_LIMIT):
+        for page in range(1, _LIST_PAGE_LIMIT + 1):
             query = dict(params)
             query["page"] = str(page)
             payload = self._get_json(path, query)

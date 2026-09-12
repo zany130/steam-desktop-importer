@@ -958,6 +958,7 @@ def test_switching_installations_clears_cached_flatpak_permission(qapp):
     window._installations = [(second, [])]
     window._selected_installation = first
     window._host_launch_permission = HostLaunchPermission(True, "cached")
+    window._probe_host_launch_permission = lambda: None
     window.install_combo.addItem(second.display_name, second.key)
     window.install_combo.setCurrentIndex(0)
     window._on_install_chosen()

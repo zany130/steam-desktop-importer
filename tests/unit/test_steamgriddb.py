@@ -257,7 +257,7 @@ def test_listing_follows_pagination():
             },
         )
 
-    client = _client([page_payload([1, 2], 0), page_payload([3], 1)])
+    client = _client([page_payload([1, 2], 1), page_payload([3], 2)])
     grids = client.get_grids(1)
     assert [asset.id for asset in grids] == [1, 2, 3]
     assert client.session.script == []
