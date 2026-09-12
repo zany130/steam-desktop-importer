@@ -551,3 +551,21 @@ def test_apng_preview_rejects_large_canvas():
     )
     animation = ApngAnimation(width=4000, height=4000, plays=0, frames=(frame, frame))
     assert _compose_apng(animation, QSize(200, 200)) is None
+
+
+def test_apng_preview_rejects_out_of_bounds_frame():
+    frame = ApngFrame(
+        png_bytes=bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+        ),
+        x=1,
+        y=0,
+        width=1,
+        height=1,
+        delay_ms=100,
+        dispose_op=0,
+        blend_op=0,
+    )
+    animation = ApngAnimation(width=1, height=1, plays=0, frames=(frame, frame))
+    assert _compose_apng(animation, QSize(200, 200)) is None

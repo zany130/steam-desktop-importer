@@ -936,3 +936,30 @@ def test_flatpak_banner_starts_async_permission_probe(qapp):
     assert calls == ["probe"]
     assert "Checking Flatpak host-launch permission" in window.banner.text()
     window.close()
+
+
+def test_switching_installations_clears_cached_flatpak_permission(qapp):
+    from steam_desktop_importer.launch import HostLaunchPermission
+
+    store = StateStore(":memory:")
+    window = MainWindow(auto_refresh=False, state_store=store)
+    first = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-a"),
+        userdata_root=Path("/tmp/steam-a/userdata"),
+        display_name="Flatpak Steam A",
+    )
+    second = SteamInstallation(
+        kind="flatpak",
+        root=Path("/tmp/steam-b"),
+        userdata_root=Path("/tmp/steam-b/userdata"),
+        display_name="Flatpak Steam B",
+    )
+    window._installations = [(second, [])]
+    window._selected_installation = first
+    window._host_launch_permission = HostLaunchPermission(True, "cached")
+    window.install_combo.addItem(second.display_name, second.key)
+    window.install_combo.setCurrentIndex(0)
+    window._on_install_chosen()
+    assert window._host_launch_permission is None
+    window.close()

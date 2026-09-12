@@ -565,9 +565,12 @@ class MainWindow(QMainWindow):
                 return
 
     def _on_install_chosen(self) -> None:
+        previous_key = self._selected_installation.key if self._selected_installation else None
         key = self.install_combo.currentData()
         pair = next((item for item in self._installations if item[0].key == key), None)
         self._selected_installation = pair[0] if pair else None
+        if self._selected_installation is None or self._selected_installation.key != previous_key:
+            self._host_launch_permission = None
         if self._selected_installation is not None:
             self._store.remember_installation(self._selected_installation.key)
         self._fill_accounts(pair[1] if pair else None)
@@ -1383,6 +1386,7 @@ class MainWindow(QMainWindow):
             store=self._store,
             on_poll_changed=lambda: self._apply_steam_poll_settings(probe_now=True),
         ).exec()
+        self._host_launch_permission = None
         self._apply_steam_poll_settings()
         self._update_banner()
 

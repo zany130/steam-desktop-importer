@@ -123,6 +123,15 @@ def _compose_apng(animation, box) -> tuple[list[QPixmap], list[int]] | None:
     pixmaps: list[QPixmap] = []
     delays: list[int] = []
     for frame in animation.frames:
+        if (
+            frame.x < 0
+            or frame.y < 0
+            or frame.width <= 0
+            or frame.height <= 0
+            or frame.x + frame.width > animation.width
+            or frame.y + frame.height > animation.height
+        ):
+            return None
         before = canvas.copy() if frame.dispose_op == 2 else None
         image = QImage.fromData(frame.png_bytes)
         if image.isNull():
